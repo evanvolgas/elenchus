@@ -69,6 +69,7 @@ export {
 // Specification types (including output interfaces)
 export {
   type Specification,
+  type SpecificationSummary,
   type Metric,
   type Constraint,
   type Integration,

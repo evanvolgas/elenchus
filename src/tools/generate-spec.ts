@@ -3,6 +3,7 @@ import type { Storage } from '../storage/index.js';
 import {
   type Specification,
   type SpecificationOutput,
+  type SpecificationSummary,
   type Phase,
   type Checkpoint,
   type AcceptanceCriterion,
@@ -20,10 +21,16 @@ export const generateSpecTool: Tool = {
 
 Produces the specification in multiple formats:
 - YAML: Machine-readable, for agent consumption
-- Markdown: Human-readable, for review
+- Markdown: Human-readable, for review (default, most token-efficient)
 - JSON: Structured task graph for orchestration
 
-Includes phases, tasks, checkpoints, acceptance criteria, and cost/duration estimates.`,
+**Token Optimization**: By default, returns only a summary and markdown format.
+Use format='all' and includeRawSpec=true only when you need the full data.
+
+Options:
+- compact (default: true): Reduces size by excluding codebaseContext
+- includeRawSpec (default: false): Include the full spec object
+- format (default: 'markdown'): Only 'all' returns multiple formats`,
 
   inputSchema: {
     type: 'object',
@@ -35,18 +42,50 @@ Includes phases, tasks, checkpoints, acceptance criteria, and cost/duration esti
       format: {
         type: 'string',
         enum: ['yaml', 'markdown', 'json', 'all'],
-        description: 'Output format(s)',
-        default: 'all',
+        description: 'Output format (default: markdown for token efficiency)',
+        default: 'markdown',
       },
       includeEstimates: {
         type: 'boolean',
         description: 'Include cost and duration estimates',
         default: true,
       },
+      compact: {
+        type: 'boolean',
+        description: 'Compact mode: excludes codebaseContext, reduces response size',
+        default: true,
+      },
+      includeRawSpec: {
+        type: 'boolean',
+        description: 'Include raw spec object (significantly increases response size)',
+        default: false,
+      },
     },
     required: ['sessionId'],
   },
 };
+
+/**
+ * Create a compact summary of the specification
+ */
+function createSummary(spec: Specification): SpecificationSummary {
+  const taskCount = spec.phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
+
+  return {
+    id: spec.id,
+    epicId: spec.epicId,
+    sessionId: spec.sessionId,
+    version: spec.version,
+    problem: spec.problem.length > 200 ? spec.problem.slice(0, 197) + '...' : spec.problem,
+    readinessScore: spec.readinessScore,
+    readinessIssues: spec.readinessIssues,
+    phaseCount: spec.phases.length,
+    taskCount,
+    estimatedMinutes: spec.estimatedDuration.totalMinutes,
+    estimatedCostUSD: spec.estimatedCost.estimatedCostUSD,
+    createdAt: spec.createdAt,
+  };
+}
 
 /**
  * Handle spec generation
@@ -97,8 +136,8 @@ export async function handleGenerateSpec(
     successMetrics: extractSuccessMetrics(epic, session),
     outOfScope: extractOutOfScope(epic, session),
 
-    // Technical context
-    codebaseContext: context,
+    // Technical context - exclude in compact mode to save tokens
+    codebaseContext: input.compact ? undefined : context,
     constraints: extractConstraints(epic, session),
     integrations: [],
 
@@ -141,16 +180,31 @@ export async function handleGenerateSpec(
     updatedAt: now,
   };
 
-  // Save spec
+  // Save spec (always save the full spec to storage)
   storage.saveSpec(spec);
 
-  // Generate output formats
+  // Build output based on requested format(s)
+  // Only include what's requested to minimize token usage
   const output: SpecificationOutput = {
-    spec,
-    yaml: yaml.stringify(spec),
-    markdown: generateMarkdown(spec),
-    json: JSON.stringify(spec, null, 2),
+    summary: createSummary(spec),
   };
+
+  // Include raw spec only if explicitly requested
+  if (input.includeRawSpec) {
+    output.spec = spec;
+  }
+
+  // Generate only requested format(s)
+  const { format } = input;
+  if (format === 'yaml' || format === 'all') {
+    output.yaml = yaml.stringify(spec);
+  }
+  if (format === 'markdown' || format === 'all') {
+    output.markdown = generateMarkdown(spec);
+  }
+  if (format === 'json' || format === 'all') {
+    output.json = JSON.stringify(spec, null, 2);
+  }
 
   return output;
 }

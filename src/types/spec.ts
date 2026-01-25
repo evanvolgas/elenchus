@@ -250,18 +250,55 @@ export type Specification = z.infer<typeof SpecificationSchema>;
  */
 export const GenerateSpecInputSchema = z.object({
   sessionId: z.string(),
-  format: z.enum(['yaml', 'markdown', 'json', 'all']).default('all'),
+  format: z.enum(['yaml', 'markdown', 'json', 'all']).default('markdown'),
   includeEstimates: z.boolean().default(true),
+  /**
+   * Compact mode reduces response size by:
+   * - Excluding codebaseContext (use elenchus_analyze separately)
+   * - Truncating long descriptions
+   * - Only returning the requested format (not all formats)
+   */
+  compact: z.boolean().default(true),
+  /**
+   * Include the raw spec object in response.
+   * When false, only the formatted output (yaml/markdown/json) is returned.
+   * Defaults to false to reduce token usage.
+   */
+  includeRawSpec: z.boolean().default(false),
 });
 
 export type GenerateSpecInput = z.infer<typeof GenerateSpecInputSchema>;
 
 /**
- * Output formats for spec
+ * Compact specification summary for reduced token usage
+ */
+export interface SpecificationSummary {
+  id: string;
+  epicId: string;
+  sessionId: string;
+  version: number;
+  problem: string;
+  readinessScore: number;
+  readinessIssues: string[];
+  phaseCount: number;
+  taskCount: number;
+  estimatedMinutes: number;
+  estimatedCostUSD: number;
+  createdAt: string;
+}
+
+/**
+ * Output formats for spec - only includes requested format(s)
  */
 export interface SpecificationOutput {
-  spec: Specification;
-  yaml: string;
-  markdown: string;
-  json: string;
+  /** Summary is always included for quick reference */
+  summary: SpecificationSummary;
+  /** Full spec object - only included if includeRawSpec=true */
+  spec?: Specification;
+  /** YAML format - only included if format is 'yaml' or 'all' */
+  yaml?: string;
+  /** Markdown format - only included if format is 'markdown' or 'all' */
+  markdown?: string;
+  /** JSON format - only included if format is 'json' or 'all' */
+  json?: string;
 }
