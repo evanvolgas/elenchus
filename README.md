@@ -5,12 +5,12 @@
 </p>
 
 <p align="center">
-  <strong>Transform epics into POCs through Socratic interrogation</strong>
+  <strong>Transform epics into agent-ready specifications through Socratic interrogation</strong>
 </p>
 
 > **Elenchus** (ἔλεγχος): The Socratic method of eliciting truth by question and answer.
 
-Transform high-level epics into working proof-of-concepts through **interrogative specification** and **checkpoint-based execution**.
+Transform high-level epics into precise, agent-ready specifications through **interrogative specification**. Elenchus is a **specification engine**, not an execution engine—it prepares the plan, external orchestrators (like Claude Flow) execute it.
 
 ## The Problem
 
@@ -137,11 +137,52 @@ Outputs in your choice of format (default: markdown for token efficiency):
 
 Use `format: 'all'` to get all formats, or `includeRawSpec: true` for the full spec object.
 
-### 6. Validate and Execute
+### 6. Validate Specification
 
 ```
-Use elenchus_validate to check the spec is complete
+Use elenchus_validate to check the spec is complete and ready for execution
 ```
+
+The generated specification is now ready to hand off to an execution orchestrator.
+
+## Executing Specifications
+
+**Elenchus generates the plan, but doesn't execute it.** Once you have a validated specification, hand it off to an execution orchestrator.
+
+### Recommended: Claude Flow
+
+Claude Flow is the recommended orchestrator for executing Elenchus specifications. It provides:
+
+- Multi-agent swarm coordination
+- Checkpoint-based execution with human approval gates
+- Background worker system for continuous optimization
+- Memory persistence across sessions
+
+**Installation**:
+
+```bash
+# Add Claude Flow MCP server
+claude mcp add claude-flow -- npx -y @claude-flow/cli@latest
+
+# Verify installation
+npx @claude-flow/cli@latest doctor
+```
+
+**Basic usage after spec generation**:
+
+```bash
+# Initialize swarm with anti-drift topology
+npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8
+
+# Spawn agents based on spec phases
+# (Or use Claude Code Task tool to spawn agents concurrently)
+```
+
+Learn more: [Claude Flow on GitHub](https://github.com/ruvnet/claude-flow)
+
+### Alternative: Claude Code Task Tool
+
+You can also use Claude Code's built-in Task tool to spawn agents directly based on the generated specification.
 
 ## MCP Tools Reference
 
@@ -151,7 +192,7 @@ Use elenchus_validate to check the spec is complete
 | `elenchus_analyze` | Analyze codebase context, patterns, and conventions |
 | `elenchus_interrogate` | Generate Socratic clarifying questions |
 | `elenchus_answer` | Process answers and update session |
-| `elenchus_generate_spec` | Create agent-ready specification |
+| `elenchus_generate_spec` | Create agent-ready specification (handoff point) |
 | `elenchus_validate` | Validate spec completeness and readiness |
 | `elenchus_status` | Check status of epics, sessions, or specs |
 | `elenchus_health` | Server health check with storage connectivity and metrics |
@@ -159,26 +200,43 @@ Use elenchus_validate to check the spec is complete
 ## Workflow Diagram
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   INGEST    │────▶│   ANALYZE   │────▶│ INTERROGATE │
-│   Epic      │     │  Codebase   │     │  Questions  │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                               │
-                    ┌──────────────────────────┘
-                    │
-                    ▼
-            ┌─────────────┐     ┌─────────────┐
-            │   ANSWER    │────▶│  GENERATE   │
-            │  Questions  │     │    Spec     │
-            └─────────────┘     └──────┬──────┘
-                                       │
-                    ┌──────────────────┘
-                    │
-                    ▼
-            ┌─────────────┐     ┌─────────────┐
-            │  VALIDATE   │────▶│   EXECUTE   │
-            │    Spec     │     │    POC      │
-            └─────────────┘     └─────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     ELENCHUS (Specification)                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐          │
+│  │   INGEST    │──▶│   ANALYZE   │──▶│ INTERROGATE │          │
+│  │   Epic      │   │  Codebase   │   │  Questions  │          │
+│  └─────────────┘   └─────────────┘   └──────┬──────┘          │
+│                                              │                  │
+│                   ┌──────────────────────────┘                  │
+│                   │                                             │
+│                   ▼                                             │
+│           ┌─────────────┐   ┌─────────────┐   ┌─────────────┐ │
+│           │   ANSWER    │──▶│  GENERATE   │──▶│  VALIDATE   │ │
+│           │  Questions  │   │    Spec     │   │    Spec     │ │
+│           └─────────────┘   └─────────────┘   └──────┬──────┘ │
+│                                                       │         │
+└───────────────────────────────────────────────────────┼─────────┘
+                                                        │
+                                      Handoff: Agent-Ready Spec
+                                                        │
+┌───────────────────────────────────────────────────────┼─────────┐
+│              EXTERNAL ORCHESTRATOR (Execution)        │         │
+│                    (Claude Flow recommended)          │         │
+├───────────────────────────────────────────────────────┼─────────┤
+│                                                       ▼         │
+│                                              ┌─────────────┐    │
+│                                              │   EXECUTE   │    │
+│                                              │    Swarm    │    │
+│                                              └──────┬──────┘    │
+│                                                     │           │
+│                                                     ▼           │
+│                                              ┌─────────────┐    │
+│                                              │   DELIVER   │    │
+│                                              │    POC      │    │
+│                                              └─────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Example Session
@@ -327,24 +385,24 @@ npm run lint
 - [x] Validation
 
 ### Next
-- [ ] Agent orchestration (`elenchus_execute`)
-- [ ] POC delivery packaging (`elenchus_deliver`)
-- [ ] JIRA/Notion/GitHub integrations
-- [ ] Checkpoint management UI
+- [ ] Checkpoint feedback loop (record execution results)
+- [ ] JIRA/Notion/GitHub integrations for epic ingestion
+- [ ] Multi-epic session support
+- [ ] Spec refinement based on execution feedback
 
 ### Future
-- [ ] Multi-user sessions
-- [ ] Cost tracking and optimization
+- [ ] Multi-user collaborative sessions
+- [ ] Cost tracking and optimization recommendations
 - [ ] Spec versioning and diff
-- [ ] Integration with claude-flow swarms
+- [ ] Learning from execution outcomes to improve future interrogations
 
 ## Philosophy
 
 1. **Interrogation over Specification**: Ask questions, don't assume answers
-2. **Checkpoints over Autonomy**: Humans approve at critical gates
+2. **Separation of Concerns**: Specification (Elenchus) and execution (external orchestrators) are distinct
 3. **Adaptation over Prescription**: Detect codebase context, don't force patterns
 4. **Transparency over Magic**: Show reasoning, decisions, and tradeoffs
-5. **Incremental over Big-Bang**: Deliver value at each checkpoint
+5. **Checkpoints over Autonomy**: Humans approve at critical gates (during execution)
 
 ## Why "Elenchus"?
 

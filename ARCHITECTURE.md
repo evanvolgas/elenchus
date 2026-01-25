@@ -285,65 +285,85 @@ interface Checkpoint {
 
 ### 6. Orchestrate Engine
 
-**Purpose**: Spawn and coordinate agents for POC execution.
+**Purpose**: Interface boundary to external orchestrators.
 
-**Responsibilities**:
-- Parse spec into executable task graph
-- Spawn appropriate agents for each task
-- Manage inter-agent communication
-- Handle failures and retries
-- Enforce checkpoint gates
-- Track progress and costs
+**What Elenchus Does**:
+- Generates machine-readable specs (YAML, JSON, Markdown)
+- Provides the contract/interface for orchestrators
+- Exposes spec via MCP resources
 
-**Integration**: Works with Claude Code's Task tool, claude-flow, or standalone agents.
+**What Elenchus Does NOT Do**:
+- Spawn agents (that's the orchestrator's job)
+- Execute tasks (that's the orchestrator's job)
+- Manage agent communication (that's the orchestrator's job)
+
+**Recommended Orchestrators**:
+- **Claude Flow**: Multi-agent swarm orchestration with memory coordination
+- **Claude Code Task tool**: Built-in concurrent agent spawning
+- **Custom orchestrators**: Any system that can consume YAML/JSON specs
+
+**The Spec IS the Interface**: The generated specification contains everything an orchestrator needs:
+- Task graph with dependencies
+- Agent type recommendations
+- Checkpoint gates
+- Acceptance criteria
+- Estimated costs and duration
 
 ```typescript
 interface Orchestration {
   id: string;
   specId: string;
 
-  // Execution state
+  // Execution state (tracked BY orchestrator, recorded IN Elenchus)
   status: 'planning' | 'executing' | 'paused' | 'completed' | 'failed';
   currentPhase: string;
   currentCheckpoint?: string;
 
-  // Agents
-  activeAgents: AgentInstance[];
-  completedTasks: TaskResult[];
-  pendingTasks: Task[];
-
-  // Metrics
+  // Metrics (reported BY orchestrator)
   startedAt: Date;
   estimatedCompletion: Date;
   actualCost: number;
   estimatedRemainingCost: number;
+
+  // External orchestrator reference
+  orchestratorType: 'claude-flow' | 'claude-code' | 'custom';
+  orchestratorSessionId?: string;
 }
 ```
 
 ### 7. Deliver Engine
 
-**Purpose**: Package POC deliverables for handoff.
+**Purpose**: Record delivery artifacts produced by orchestrators.
 
-**Deliverables**:
-- Working code (deployed or local)
-- Architecture documentation
-- Decision log (why choices were made)
-- Test results
-- Known limitations
-- Productionization roadmap
-- Demo script
+**What Elenchus Does**:
+- Stores references to delivered artifacts
+- Validates artifacts against acceptance criteria
+- Generates delivery reports
+- Creates handoff documentation
+
+**What Elenchus Does NOT Do**:
+- Create the code artifacts (orchestrator does this)
+- Deploy the POC (orchestrator does this)
+- Run the tests (orchestrator does this)
+
+**Delivery Flow**:
+1. Orchestrator completes POC implementation
+2. Orchestrator calls `elenchus_delivery` with artifact references
+3. Elenchus validates against original spec
+4. Elenchus generates delivery report
+5. User reviews and accepts/rejects delivery
 
 ```typescript
 interface Delivery {
   id: string;
   orchestrationId: string;
 
-  // Artifacts
+  // Artifacts (produced BY orchestrator, recorded IN Elenchus)
   codeLocation: string; // branch, PR, or path
   documentation: Document[];
   testResults: TestResult[];
 
-  // Validation
+  // Validation (performed BY Elenchus)
   acceptanceCriteriaResults: CriteriaResult[];
   overallScore: number;
 
@@ -351,25 +371,107 @@ interface Delivery {
   knownLimitations: string[];
   productionRoadmap: RoadmapItem[];
   demoScript: DemoStep[];
+
+  // Orchestrator metadata
+  deliveredBy: string; // orchestrator identifier
+  deliveredAt: Date;
 }
 ```
+
+## Integration Boundaries
+
+### Elenchus vs. Orchestrator
+
+**Elenchus is a specification system, not an execution system.**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         ELENCHUS                                │
+│                      (Specification)                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Epic → Analyze → Interrogate → Generate Spec → Validate       │
+│                                                                 │
+│  Output: Machine-readable specification (YAML/JSON/Markdown)   │
+│          - Task graph with dependencies                        │
+│          - Agent type recommendations                          │
+│          - Checkpoint gates                                    │
+│          - Acceptance criteria                                 │
+│          - Cost/duration estimates                             │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ Spec (via MCP resource)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      ORCHESTRATOR                               │
+│                      (Execution)                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Read Spec → Spawn Agents → Coordinate → Implement → Deliver  │
+│                                                                 │
+│  Recommended orchestrators:                                     │
+│  - Claude Flow (multi-agent swarm with memory coordination)    │
+│  - Claude Code Task tool (built-in concurrent agents)          │
+│  - Custom orchestrators (consume YAML/JSON)                    │
+│                                                                 │
+│  Reports back to Elenchus:                                      │
+│  - Checkpoint decisions (elenchus_checkpoint)                   │
+│  - Delivery artifacts (elenchus_delivery)                       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### The Spec is the Contract
+
+**The generated specification IS the interface between Elenchus and orchestrators.**
+
+Elenchus produces specs that contain:
+- **What to build**: Problem statement, user persona, success metrics
+- **How to build**: Task graph, agent recommendations, dependencies
+- **When to validate**: Checkpoint gates with approval criteria
+- **How to measure**: Acceptance criteria, test strategy
+
+Orchestrators consume specs and:
+- **Spawn agents**: Based on agent type recommendations
+- **Execute tasks**: Following the task graph and dependencies
+- **Enforce checkpoints**: Pause for human approval via `elenchus_checkpoint`
+- **Report results**: Submit artifacts via `elenchus_delivery`
+
+### What Elenchus Does NOT Do
+
+❌ **Does NOT spawn agents** - That's the orchestrator's job
+❌ **Does NOT execute tasks** - That's the orchestrator's job
+❌ **Does NOT manage agent communication** - That's the orchestrator's job
+❌ **Does NOT deploy code** - That's the orchestrator's job
+❌ **Does NOT run tests** - That's the orchestrator's job
+
+### What Elenchus DOES Do
+
+✅ **Ingests epics** from multiple sources (text, JIRA, GitHub, Notion)
+✅ **Analyzes codebases** to understand context and patterns
+✅ **Asks clarifying questions** through Socratic dialogue
+✅ **Generates specifications** in multiple formats (YAML, JSON, Markdown)
+✅ **Validates specs** for completeness and readiness
+✅ **Records checkpoint decisions** made during orchestration
+✅ **Records delivery artifacts** produced by orchestrators
+✅ **Validates deliveries** against original acceptance criteria
 
 ## MCP Interface
 
 ### Tools
 
-| Tool | Description | Inputs |
-|------|-------------|--------|
-| `elenchus_ingest` | Ingest an epic from various sources | source, content, options |
-| `elenchus_analyze` | Analyze codebase context | path, depth |
-| `elenchus_interrogate` | Start or continue interrogation session | epicId, sessionId? |
-| `elenchus_answer` | Provide answers to questions | sessionId, answers |
-| `elenchus_generate_spec` | Generate spec from session | sessionId, format |
-| `elenchus_validate` | Validate spec completeness | specId |
-| `elenchus_execute` | Start POC execution | specId, options |
-| `elenchus_checkpoint` | Handle checkpoint approval | checkpointId, action, feedback? |
-| `elenchus_status` | Check execution status | orchestrationId |
-| `elenchus_deliver` | Package POC for delivery | orchestrationId |
+| Tool | Description | Scope | Inputs |
+|------|-------------|-------|--------|
+| `elenchus_ingest` | Ingest an epic from various sources | Elenchus | source, content, options |
+| `elenchus_analyze` | Analyze codebase context | Elenchus | path, depth |
+| `elenchus_interrogate` | Start or continue interrogation session | Elenchus | epicId, sessionId? |
+| `elenchus_answer` | Provide answers to questions | Elenchus | sessionId, answers |
+| `elenchus_generate_spec` | Generate spec from session | Elenchus | sessionId, format |
+| `elenchus_validate` | Validate spec completeness | Elenchus | specId |
+| `elenchus_checkpoint` | Record checkpoint decision | Called by orchestrator | checkpointId, action, feedback? |
+| `elenchus_status` | Check epic/spec/session status | Elenchus | epicId?, specId?, sessionId? |
+| `elenchus_delivery` | Record delivery artifacts | Called by orchestrator | orchestrationId, artifacts |
 
 ### Resources
 
@@ -386,6 +488,10 @@ interface Delivery {
 ### Happy Path
 
 ```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ELENCHUS TERRITORY (Specification)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 1. USER: "Turn this epic into a POC: [epic text]"
    └─▶ elenchus_ingest(source: 'text', content: epic)
        └─▶ Epic{id: 'epic-001'}
@@ -409,15 +515,25 @@ interface Delivery {
 6. USER: Reviews and approves spec
    └─▶ elenchus_checkpoint(checkpointId: 'pre-spec', action: 'approve')
 
-7. ELENCHUS: Executes POC in phases with checkpoints
-   └─▶ elenchus_execute(specId: 'spec-001')
-       └─▶ Orchestration{status: 'executing', ...}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ORCHESTRATOR TERRITORY (Execution)
+ ⚠️  Elenchus does NOT execute - it provides the spec as input
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-8. ELENCHUS: Pauses at checkpoint
+7. ORCHESTRATOR: Reads spec and spawns agents
+   └─▶ Claude Flow / Claude Code Task tool
+       ├─▶ Spawns researcher, architect, coder, tester agents
+       ├─▶ Coordinates multi-agent execution
+       └─▶ Implements POC according to spec
+
+8. ORCHESTRATOR: Reaches checkpoint, calls Elenchus to record decision
    └─▶ elenchus_checkpoint(checkpointId: 'post-arch', action: 'approve')
+       └─▶ Elenchus records checkpoint decision
+       └─▶ Orchestrator continues execution
 
-9. ELENCHUS: Completes and packages
-   └─▶ elenchus_deliver(orchestrationId: 'orch-001')
+9. ORCHESTRATOR: Completes POC and reports artifacts to Elenchus
+   └─▶ elenchus_delivery(orchestrationId: 'orch-001', artifacts: {...})
+       └─▶ Elenchus validates against acceptance criteria
        └─▶ Delivery{acceptanceCriteriaResults: [...], overallScore: 92}
 ```
 

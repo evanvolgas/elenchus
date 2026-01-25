@@ -10,6 +10,8 @@ import { generateSpecTool, handleGenerateSpec } from './generate-spec.js';
 import { validateTool, handleValidate } from './validate.js';
 import { statusTool, handleStatus } from './status.js';
 import { healthTool, handleHealth } from './health.js';
+import { checkpointTool, handleCheckpoint } from './checkpoint.js';
+import { deliveryTool, handleDelivery } from './delivery.js';
 
 /**
  * Error codes for programmatic error handling.
@@ -45,6 +47,8 @@ export function registerTools(): Tool[] {
     validateTool,
     statusTool,
     healthTool,
+    checkpointTool,
+    deliveryTool,
   ];
 }
 
@@ -174,6 +178,14 @@ export async function handleToolCall(
 
           case 'elenchus_health':
             result = await handleHealth(args, storage);
+            break;
+
+          case 'elenchus_checkpoint':
+            result = await handleCheckpoint(args, storage);
+            break;
+
+          case 'elenchus_delivery':
+            result = await handleDelivery(args, storage);
             break;
 
           default:

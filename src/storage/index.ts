@@ -8,11 +8,14 @@ import {
   type InterrogationSession,
   type Specification,
   type CodebaseContext,
+  type CheckpointDecision,
+  type CheckpointStatus,
   EpicSchema,
   InterrogationSessionSchema,
   SpecificationSchema,
   CodebaseContextSchema,
 } from '../types/index.js';
+import type { Delivery } from '../types/delivery.js';
 import { generateId } from '../utils/id.js';
 import { logger } from '../utils/logger.js';
 
@@ -99,10 +102,23 @@ export class Storage {
 
       CREATE TABLE IF NOT EXISTS deliveries (
         id TEXT PRIMARY KEY,
-        orchestration_id TEXT NOT NULL,
+        spec_id TEXT NOT NULL,
+        epic_id TEXT NOT NULL,
         data TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        FOREIGN KEY (orchestration_id) REFERENCES orchestrations(id)
+        FOREIGN KEY (spec_id) REFERENCES specs(id),
+        FOREIGN KEY (epic_id) REFERENCES epics(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS checkpoint_decisions (
+        id TEXT PRIMARY KEY,
+        spec_id TEXT NOT NULL,
+        checkpoint_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        feedback TEXT,
+        decided_by TEXT,
+        decided_at TEXT NOT NULL,
+        FOREIGN KEY (spec_id) REFERENCES specs(id)
       );
 
       -- Indexes for common queries
@@ -110,6 +126,10 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_specs_epic ON specs(epic_id);
       CREATE INDEX IF NOT EXISTS idx_specs_session ON specs(session_id);
       CREATE INDEX IF NOT EXISTS idx_orchestrations_spec ON orchestrations(spec_id);
+      CREATE INDEX IF NOT EXISTS idx_checkpoint_decisions_spec ON checkpoint_decisions(spec_id);
+      CREATE INDEX IF NOT EXISTS idx_checkpoint_decisions_checkpoint ON checkpoint_decisions(checkpoint_id);
+      CREATE INDEX IF NOT EXISTS idx_deliveries_spec ON deliveries(spec_id);
+      CREATE INDEX IF NOT EXISTS idx_deliveries_epic ON deliveries(epic_id);
     `);
   }
 
@@ -273,6 +293,155 @@ export class Storage {
       return undefined;
     }
     return parsed.data;
+  }
+
+  // Checkpoint decision operations
+
+  saveCheckpointDecision(decision: CheckpointDecision): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO checkpoint_decisions (id, spec_id, checkpoint_id, action, feedback, decided_by, decided_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      decision.id,
+      decision.specId,
+      decision.checkpointId,
+      decision.action,
+      decision.feedback ?? null,
+      decision.decidedBy ?? null,
+      decision.decidedAt
+    );
+  }
+
+  getCheckpointDecisionsForSpec(specId: string): CheckpointDecision[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM checkpoint_decisions WHERE spec_id = ? ORDER BY decided_at DESC'
+    );
+    const rows = stmt.all(specId) as Array<{
+      id: string;
+      spec_id: string;
+      checkpoint_id: string;
+      action: 'approve' | 'reject' | 'request-changes';
+      feedback: string | null;
+      decided_by: string | null;
+      decided_at: string;
+    }>;
+
+    return rows.map(row => ({
+      id: row.id,
+      specId: row.spec_id,
+      checkpointId: row.checkpoint_id,
+      action: row.action,
+      feedback: row.feedback ?? undefined,
+      decidedBy: row.decided_by ?? undefined,
+      decidedAt: row.decided_at,
+    }));
+  }
+
+  getCheckpointDecision(checkpointId: string): CheckpointDecision | undefined {
+    const stmt = this.db.prepare(
+      'SELECT * FROM checkpoint_decisions WHERE checkpoint_id = ? ORDER BY decided_at DESC LIMIT 1'
+    );
+    const row = stmt.get(checkpointId) as {
+      id: string;
+      spec_id: string;
+      checkpoint_id: string;
+      action: 'approve' | 'reject' | 'request-changes';
+      feedback: string | null;
+      decided_by: string | null;
+      decided_at: string;
+    } | undefined;
+
+    if (!row) return undefined;
+
+    return {
+      id: row.id,
+      specId: row.spec_id,
+      checkpointId: row.checkpoint_id,
+      action: row.action,
+      feedback: row.feedback ?? undefined,
+      decidedBy: row.decided_by ?? undefined,
+      decidedAt: row.decided_at,
+    };
+  }
+
+  /**
+   * Update checkpoint status in a specification.
+   * Note: This doesn't persist the status separately - it's a helper for external orchestrators.
+   * The decision is stored in checkpoint_decisions table.
+   */
+  updateCheckpointStatus(specId: string, checkpointId: string, status: CheckpointStatus): void {
+    // This is a no-op in the current implementation since we don't store checkpoint status
+    // in the spec itself. External orchestrators should query checkpoint_decisions to get status.
+    // This method exists for interface compatibility and future extension.
+    logger.debug('Checkpoint status updated (decision recorded separately)', undefined, {
+      specId,
+      checkpointId,
+      status,
+    });
+  }
+
+  // Delivery operations
+
+  saveDelivery(delivery: Delivery): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO deliveries (id, spec_id, epic_id, data, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      delivery.id,
+      delivery.specId,
+      delivery.epicId,
+      JSON.stringify(delivery),
+      delivery.createdAt
+    );
+  }
+
+  getDelivery(id: string): Delivery | undefined {
+    const stmt = this.db.prepare('SELECT data FROM deliveries WHERE id = ?');
+    const row = stmt.get(id) as { data: string } | undefined;
+    if (!row) return undefined;
+
+    try {
+      return JSON.parse(row.data) as Delivery;
+    } catch (error) {
+      logger.error('Failed to parse delivery from database', error, { id });
+      return undefined;
+    }
+  }
+
+  getDeliveriesForSpec(specId: string): Delivery[] {
+    const stmt = this.db.prepare(
+      'SELECT data FROM deliveries WHERE spec_id = ? ORDER BY created_at DESC'
+    );
+    const rows = stmt.all(specId) as Array<{ data: string }>;
+    return rows
+      .map((row) => {
+        try {
+          return JSON.parse(row.data) as Delivery;
+        } catch (error) {
+          logger.error('Failed to parse delivery from database during list', error, { specId });
+          return null;
+        }
+      })
+      .filter((delivery): delivery is Delivery => delivery !== null);
+  }
+
+  getDeliveriesForEpic(epicId: string): Delivery[] {
+    const stmt = this.db.prepare(
+      'SELECT data FROM deliveries WHERE epic_id = ? ORDER BY created_at DESC'
+    );
+    const rows = stmt.all(epicId) as Array<{ data: string }>;
+    return rows
+      .map((row) => {
+        try {
+          return JSON.parse(row.data) as Delivery;
+        } catch (error) {
+          logger.error('Failed to parse delivery from database during list', error, { epicId });
+          return null;
+        }
+      })
+      .filter((delivery): delivery is Delivery => delivery !== null);
   }
 
   // Utility

@@ -100,6 +100,24 @@ export {
   GenerateSpecInputSchema,
 } from './spec.js';
 
+// Checkpoint types
+export {
+  type CheckpointDecision,
+  type CheckpointDecisionInput,
+  type CheckpointStatus,
+  CheckpointDecisionSchema,
+} from './checkpoint.js';
+
+// Delivery types
+export {
+  type Delivery,
+  type DeliveryArtifact,
+  type DeliverySummary,
+  type CreateDeliveryInput,
+  DeliveryArtifactSchema,
+  CreateDeliveryInputSchema,
+} from './delivery.js';
+
 // Re-export utility types for convenience
 export type {
   // Error types
