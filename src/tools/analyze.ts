@@ -4,6 +4,7 @@ import {
   type CodebaseContext,
   type Convention,
   type Dependency,
+  type DetectedLanguage,
   type FileReference,
   type RiskAssessment,
   AnalyzeInputSchema,
@@ -13,6 +14,7 @@ import { join } from 'node:path';
 import { glob } from 'glob';
 import { detectAllLanguages } from './detectors/index.js';
 import { logger } from '../utils/logger.js';
+import { validatePath, sanitizeGlobPattern, InvalidPathError, PathTraversalError } from '../utils/path-security.js';
 
 /**
  * Tool definition for codebase analysis
@@ -65,11 +67,22 @@ export async function handleAnalyze(
   storage: Storage
 ): Promise<CodebaseContext> {
   const input = AnalyzeInputSchema.parse(args);
-  const rootPath = input.path;
 
-  // Check if path exists
-  if (!existsSync(rootPath)) {
-    throw new Error(`Path does not exist: ${rootPath}`);
+  // Validate and normalize path to prevent directory traversal attacks
+  let rootPath: string;
+  try {
+    rootPath = validatePath(input.path, {
+      mustExist: true,
+      mustBeDirectory: true,
+    });
+  } catch (error) {
+    if (error instanceof PathTraversalError) {
+      throw new Error(`Security error: Path traversal attempt detected in "${input.path}"`);
+    }
+    if (error instanceof InvalidPathError) {
+      throw new Error(`Invalid path: ${error.reason}`);
+    }
+    throw error;
   }
 
   const now = new Date().toISOString();
@@ -82,10 +95,15 @@ export async function handleAnalyze(
   const dependencies = extractDependencies(packageJson);
   const testCoverage = analyzeTestCoverage(rootPath);
   const contextFiles = findContextFiles(rootPath);
-  const riskAreas = assessRisks(rootPath, maturity);
-  const relevantFiles = findRelevantFiles(rootPath, input.focusAreas ?? []);
 
-  // Multi-language detection
+  // Sanitize focus areas to prevent glob injection attacks
+  const sanitizedFocusAreas = (input.focusAreas ?? [])
+    .map(area => sanitizeGlobPattern(area))
+    .filter(area => area.length > 0);
+
+  const relevantFiles = findRelevantFiles(rootPath, sanitizedFocusAreas);
+
+  // Multi-language detection (must happen before risk assessment)
   const detectedLanguages = detectAllLanguages(rootPath);
   const primaryLanguage = detectedLanguages.length > 0
     ? (detectedLanguages[0]?.name ?? 'Unknown')
@@ -95,6 +113,13 @@ export async function handleAnalyze(
   const allFrameworks = detectedLanguages.flatMap((lang) => lang.frameworks);
   const legacyFrameworks = detectFrameworks(packageJson);
   const frameworks = [...new Set([...allFrameworks, ...legacyFrameworks])];
+
+  // Risk assessment (uses detected languages for language-aware checks)
+  const riskAreas = assessRisks(rootPath, maturity, detectedLanguages);
+
+  // Derive quality signals from detected languages to avoid false positives
+  const anyLanguageHasLinting = detectedLanguages.some(lang => lang.hasLinting);
+  const anyLanguageHasTypeChecking = detectedLanguages.some(lang => lang.hasTypeChecking);
 
   const context: CodebaseContext = {
     analyzedAt: now,
@@ -109,13 +134,9 @@ export async function handleAnalyze(
     suggestedPatterns: [],
     dependencies,
     testCoverage,
-    hasTypeScript: existsSync(join(rootPath, 'tsconfig.json')),
-    hasLinting: existsSync(join(rootPath, '.eslintrc.json')) ||
-                existsSync(join(rootPath, '.eslintrc.js')) ||
-                existsSync(join(rootPath, 'eslint.config.js')),
-    hasCICD: existsSync(join(rootPath, '.github/workflows')) ||
-             existsSync(join(rootPath, '.gitlab-ci.yml')) ||
-             existsSync(join(rootPath, 'Jenkinsfile')),
+    hasTypeScript: existsSync(join(rootPath, 'tsconfig.json')) || anyLanguageHasTypeChecking,
+    hasLinting: hasLintingConfig(rootPath) || anyLanguageHasLinting,
+    hasCICD: hasCICDConfig(rootPath),
     riskAreas,
     relevantFiles,
     contextFiles,
@@ -144,20 +165,29 @@ function detectMaturity(
   rootPath: string,
   _packageJson: Record<string, unknown> | null
 ): CodebaseContext['maturity'] {
-  // Count files
+  // Count files across all supported languages
   let fileCount = 0;
   let testCount = 0;
 
   try {
-    const files = glob.sync('**/*.{ts,tsx,js,jsx,py,go,rs}', {
+    const files = glob.sync('**/*.{ts,tsx,js,jsx,py,go,rs,php}', {
       cwd: rootPath,
-      ignore: ['node_modules/**', 'dist/**', 'build/**', '.git/**'],
+      ignore: ['node_modules/**', 'dist/**', 'build/**', '.git/**', 'venv/**', '.venv/**', 'vendor/**'],
     });
     fileCount = files.length;
+
+    // Count test files with language-aware patterns
     testCount = files.filter(f =>
+      // JavaScript/TypeScript patterns
       f.includes('.test.') ||
       f.includes('.spec.') ||
-      f.includes('__tests__')
+      f.includes('__tests__') ||
+      // Python patterns
+      f.startsWith('test_') ||
+      f.includes('/test_') ||
+      f.includes('_test.py') ||
+      // Go patterns
+      f.endsWith('_test.go')
     ).length;
   } catch (error) {
     logger.warn('Failed to glob source files during maturity detection', error, { rootPath });
@@ -165,9 +195,8 @@ function detectMaturity(
 
   // Check for common maturity signals
   const hasTests = testCount > 0;
-  const hasCI = existsSync(join(rootPath, '.github/workflows')) ||
-                existsSync(join(rootPath, '.gitlab-ci.yml'));
-  const hasTypeScript = existsSync(join(rootPath, 'tsconfig.json'));
+  const hasCI = hasCICDConfig(rootPath);
+  const hasStaticTyping = hasStaticTypeConfig(rootPath);
   const hasReadme = existsSync(join(rootPath, 'README.md'));
   const hasDocs = existsSync(join(rootPath, 'docs'));
 
@@ -175,7 +204,7 @@ function detectMaturity(
   let score = 0;
   if (hasTests) score += 2;
   if (hasCI) score += 2;
-  if (hasTypeScript) score += 1;
+  if (hasStaticTyping) score += 1;
   if (hasReadme) score += 1;
   if (hasDocs) score += 1;
   if (fileCount > 50) score += 1;
@@ -185,6 +214,36 @@ function detectMaturity(
   if (score <= 2) return 'early';
   if (score <= 5) return 'established';
   return 'legacy';
+}
+
+/**
+ * Check for static type configuration (language-agnostic)
+ */
+function hasStaticTypeConfig(rootPath: string): boolean {
+  const typeConfigs = [
+    // TypeScript
+    'tsconfig.json',
+    // Python
+    'mypy.ini',
+    'pyrightconfig.json',
+    '.mypy.ini',
+    // Pyproject.toml with [tool.mypy] is handled by detector
+  ];
+
+  // Also check pyproject.toml for [tool.mypy] or [tool.pyright]
+  const pyprojectPath = join(rootPath, 'pyproject.toml');
+  if (existsSync(pyprojectPath)) {
+    try {
+      const content = readFileSync(pyprojectPath, 'utf-8');
+      if (content.includes('[tool.mypy]') || content.includes('[tool.pyright]')) {
+        return true;
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }
+
+  return typeConfigs.some(config => existsSync(join(rootPath, config)));
 }
 
 function detectArchitecture(rootPath: string): CodebaseContext['architecture'] {
@@ -352,39 +411,94 @@ function detectFrameworks(packageJson: Record<string, unknown> | null): string[]
 }
 
 function analyzeTestCoverage(rootPath: string): CodebaseContext['testCoverage'] {
-  // Check for test files
   let hasTests = false;
   let testFramework: string | undefined;
+  let testCommand: string | undefined;
 
+  // Check for test files across all languages
   try {
-    const testFiles = glob.sync('**/*.{test,spec}.{ts,tsx,js,jsx}', {
+    const ignorePatterns = ['node_modules/**', 'dist/**', 'venv/**', '.venv/**', 'vendor/**', '__pycache__/**'];
+
+    // JavaScript/TypeScript test patterns
+    const jsTestFiles = glob.sync('**/*.{test,spec}.{ts,tsx,js,jsx}', {
       cwd: rootPath,
-      ignore: ['node_modules/**', 'dist/**'],
+      ignore: ignorePatterns,
     });
-    hasTests = testFiles.length > 0;
+
+    // Python test patterns (test_*.py or *_test.py)
+    const pyTestFiles = glob.sync('**/test_*.py', {
+      cwd: rootPath,
+      ignore: ignorePatterns,
+    });
+    const pyTestFiles2 = glob.sync('**/*_test.py', {
+      cwd: rootPath,
+      ignore: ignorePatterns,
+    });
+
+    // Go test patterns (*_test.go)
+    const goTestFiles = glob.sync('**/*_test.go', {
+      cwd: rootPath,
+      ignore: ignorePatterns,
+    });
+
+    hasTests = jsTestFiles.length > 0 || pyTestFiles.length > 0 || pyTestFiles2.length > 0 || goTestFiles.length > 0;
   } catch (error) {
     logger.warn('Failed to glob test files', error, { rootPath });
   }
 
-  // Detect test framework
+  // Detect test framework from package.json (JavaScript/TypeScript)
   const packagePath = join(rootPath, 'package.json');
   if (existsSync(packagePath)) {
     try {
       const pkg = JSON.parse(readFileSync(packagePath, 'utf-8'));
       const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      if ('vitest' in deps) testFramework = 'vitest';
-      else if ('jest' in deps) testFramework = 'jest';
-      else if ('mocha' in deps) testFramework = 'mocha';
+      if ('vitest' in deps) {
+        testFramework = 'vitest';
+        testCommand = 'npm test';
+      } else if ('jest' in deps) {
+        testFramework = 'jest';
+        testCommand = 'npm test';
+      } else if ('mocha' in deps) {
+        testFramework = 'mocha';
+        testCommand = 'npm test';
+      }
     } catch (error) {
       logger.warn('Failed to parse package.json for test framework detection', error, { packagePath });
     }
+  }
+
+  // Detect pytest from pyproject.toml or pytest.ini (Python)
+  if (!testFramework) {
+    const pyprojectPath = join(rootPath, 'pyproject.toml');
+    const pytestIniPath = join(rootPath, 'pytest.ini');
+
+    if (existsSync(pytestIniPath)) {
+      testFramework = 'pytest';
+      testCommand = 'pytest';
+    } else if (existsSync(pyprojectPath)) {
+      try {
+        const content = readFileSync(pyprojectPath, 'utf-8');
+        if (content.includes('[tool.pytest]') || content.includes('pytest')) {
+          testFramework = 'pytest';
+          testCommand = 'pytest';
+        }
+      } catch {
+        // Ignore read errors
+      }
+    }
+  }
+
+  // Detect Go testing
+  if (!testFramework && existsSync(join(rootPath, 'go.mod'))) {
+    testFramework = 'go test';
+    testCommand = 'go test ./...';
   }
 
   return {
     overallPercentage: hasTests ? 50 : 0, // Placeholder - would need actual coverage run
     hasTests,
     testFramework,
-    testCommand: testFramework ? `npm test` : undefined,
+    testCommand,
     criticalPathsCovered: hasTests,
   };
 }
@@ -413,14 +527,18 @@ function findContextFiles(rootPath: string): CodebaseContext['contextFiles'] {
 
 function assessRisks(
   rootPath: string,
-  maturity: CodebaseContext['maturity']
+  maturity: CodebaseContext['maturity'],
+  detectedLanguages: DetectedLanguage[]
 ): RiskAssessment[] {
   const risks: RiskAssessment[] = [];
 
-  // No tests risk
-  const hasTests = existsSync(join(rootPath, '__tests__')) ||
-                   existsSync(join(rootPath, 'tests'));
-  if (!hasTests && maturity !== 'greenfield') {
+  // Check if any detected language has test coverage
+  const anyLanguageHasTests = detectedLanguages.some(lang => lang.hasTests);
+
+  // No tests risk - check both directory structure and language-specific detection
+  const hasTestsDirectory = existsSync(join(rootPath, '__tests__')) ||
+                            existsSync(join(rootPath, 'tests'));
+  if (!hasTestsDirectory && !anyLanguageHasTests && maturity !== 'greenfield') {
     risks.push({
       area: 'Testing',
       level: 'high',
@@ -429,13 +547,20 @@ function assessRisks(
     });
   }
 
-  // No TypeScript risk
-  if (!existsSync(join(rootPath, 'tsconfig.json'))) {
+  // Type safety risk - check language-specific type checking, not just TypeScript
+  const anyLanguageHasTypeChecking = detectedLanguages.some(lang => lang.hasTypeChecking);
+  const hasTypeScriptConfig = existsSync(join(rootPath, 'tsconfig.json'));
+
+  if (!hasTypeScriptConfig && !anyLanguageHasTypeChecking) {
+    // Determine appropriate mitigation based on primary language
+    const primaryLang = detectedLanguages.length > 0 ? detectedLanguages[0] : null;
+    const mitigations = getTypeCheckingMitigations(primaryLang?.name);
+
     risks.push({
       area: 'Type Safety',
       level: 'medium',
-      reason: 'No TypeScript configuration found. Type errors may go undetected.',
-      mitigations: ['Consider adding TypeScript', 'Use JSDoc for type hints'],
+      reason: 'No static type checking configured. Type errors may go undetected.',
+      mitigations,
     });
   }
 
@@ -451,6 +576,74 @@ function assessRisks(
   }
 
   return risks;
+}
+
+/**
+ * Check for linting configuration (language-agnostic)
+ */
+function hasLintingConfig(rootPath: string): boolean {
+  const lintConfigs = [
+    // JavaScript/TypeScript
+    '.eslintrc.json',
+    '.eslintrc.js',
+    '.eslintrc.cjs',
+    '.eslintrc.yaml',
+    '.eslintrc.yml',
+    'eslint.config.js',
+    'eslint.config.mjs',
+    // Python
+    'ruff.toml',
+    '.ruff.toml',
+    '.pylintrc',
+    '.flake8',
+    // Go
+    '.golangci.yml',
+    '.golangci.yaml',
+    // PHP
+    'phpstan.neon',
+    'phpstan.neon.dist',
+    'psalm.xml',
+  ];
+
+  return lintConfigs.some(config => existsSync(join(rootPath, config)));
+}
+
+/**
+ * Check for CI/CD configuration
+ */
+function hasCICDConfig(rootPath: string): boolean {
+  const ciConfigs = [
+    '.github/workflows',
+    '.gitlab-ci.yml',
+    'Jenkinsfile',
+    '.circleci/config.yml',
+    '.travis.yml',
+    'azure-pipelines.yml',
+    'bitbucket-pipelines.yml',
+  ];
+
+  return ciConfigs.some(config => existsSync(join(rootPath, config)));
+}
+
+/**
+ * Get language-appropriate type checking mitigations
+ */
+function getTypeCheckingMitigations(language: string | undefined): string[] {
+  switch (language) {
+    case 'Python':
+      return ['Add mypy or pyright for static type checking', 'Use type hints (PEP 484)'];
+    case 'Go':
+      return ['Go has built-in type checking - ensure go vet is run', 'Add golangci-lint'];
+    case 'TypeScript':
+    case 'JavaScript':
+      return ['Consider adding TypeScript', 'Use JSDoc for type hints'];
+    case 'PHP':
+      return ['Add PHPStan or Psalm for static analysis', 'Use PHP 8+ typed properties'];
+    case 'Rust':
+      return ['Rust has built-in type checking - ensure cargo check passes'];
+    default:
+      return ['Consider adding static type checking for your language'];
+  }
 }
 
 function findRelevantFiles(rootPath: string, focusAreas: string[]): FileReference[] {

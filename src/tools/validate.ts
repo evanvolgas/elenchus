@@ -1,10 +1,50 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Storage } from '../storage/index.js';
+import type { Phase } from '../types/index.js';
 import { z } from 'zod';
 
 const ValidateInputSchema = z.object({
   specId: z.string(),
 });
+
+/**
+ * Validation scoring weights and thresholds.
+ * Extracted as named constants for maintainability.
+ */
+const VALIDATION_CONFIG = {
+  /** Minimum characters for a valid problem statement */
+  MIN_PROBLEM_LENGTH: 20,
+  /** Minimum characters for a valid user persona */
+  MIN_USER_PERSONA_LENGTH: 10,
+  /** Score deduction for missing problem statement */
+  PROBLEM_MISSING_PENALTY: 15,
+  /** Score deduction for missing user persona */
+  USER_PERSONA_MISSING_PENALTY: 5,
+  /** Score deduction for missing success metrics */
+  SUCCESS_METRICS_MISSING_PENALTY: 15,
+  /** Score deduction for missing primary metric */
+  PRIMARY_METRIC_MISSING_PENALTY: 5,
+  /** Score deduction for missing acceptance criteria */
+  ACCEPTANCE_CRITERIA_MISSING_PENALTY: 15,
+  /** Score deduction for non-testable acceptance criteria */
+  NON_TESTABLE_CRITERIA_PENALTY: 5,
+  /** Score deduction for missing phases */
+  PHASES_MISSING_PENALTY: 15,
+  /** Score deduction for unknown dependency */
+  UNKNOWN_DEPENDENCY_PENALTY: 10,
+  /** Score deduction for empty phase tasks */
+  EMPTY_PHASE_TASKS_PENALTY: 5,
+  /** Score deduction for missing checkpoints */
+  CHECKPOINTS_MISSING_PENALTY: 5,
+  /** Score deduction for missing risks */
+  RISKS_MISSING_PENALTY: 5,
+  /** Score deduction for missing codebase context */
+  CODEBASE_CONTEXT_MISSING_PENALTY: 5,
+  /** Score deduction for circular dependencies */
+  CIRCULAR_DEPENDENCY_PENALTY: 20,
+  /** Score threshold for "ready" status */
+  READY_SCORE_THRESHOLD: 80,
+} as const;
 
 /**
  * Tool definition for spec validation
@@ -46,6 +86,89 @@ interface ValidationResult {
 }
 
 /**
+ * Detect circular dependencies in phase graph using DFS.
+ *
+ * Uses a three-color algorithm (white/gray/black) to detect back edges.
+ * - White (unvisited): not yet processed
+ * - Gray (visiting): currently in the recursion stack
+ * - Black (visited): fully processed
+ *
+ * @param phases - Array of phases with their dependencies
+ * @returns Array of detected cycles, each as a string describing the cycle path
+ */
+function detectCircularDependencies(phases: Phase[]): string[] {
+  const cycles: string[] = [];
+
+  // Build adjacency list from phases
+  const graph = new Map<string, string[]>();
+  const phaseNames = new Map<string, string>();
+
+  for (const phase of phases) {
+    graph.set(phase.id, phase.dependencies);
+    phaseNames.set(phase.id, phase.name);
+  }
+
+  // Track visited state: 0 = unvisited, 1 = visiting (in stack), 2 = visited
+  const state = new Map<string, number>();
+  for (const phase of phases) {
+    state.set(phase.id, 0);
+  }
+
+  // Track path for cycle reporting
+  const path: string[] = [];
+
+  function dfs(nodeId: string): boolean {
+    const nodeState = state.get(nodeId);
+
+    // If currently visiting, we found a cycle
+    if (nodeState === 1) {
+      // Find the start of the cycle in the path
+      const cycleStart = path.indexOf(nodeId);
+      if (cycleStart !== -1) {
+        const cyclePath = path.slice(cycleStart);
+        cyclePath.push(nodeId); // Complete the cycle
+        const cycleNames = cyclePath.map(id => phaseNames.get(id) ?? id);
+        cycles.push(cycleNames.join(' → '));
+      }
+      return true;
+    }
+
+    // If already fully visited, no cycle through this node
+    if (nodeState === 2) {
+      return false;
+    }
+
+    // Mark as visiting
+    state.set(nodeId, 1);
+    path.push(nodeId);
+
+    // Visit all dependencies
+    const deps = graph.get(nodeId) ?? [];
+    for (const depId of deps) {
+      // Only follow edges to nodes that exist in our graph
+      if (graph.has(depId)) {
+        dfs(depId);
+      }
+    }
+
+    // Mark as visited
+    state.set(nodeId, 2);
+    path.pop();
+
+    return false;
+  }
+
+  // Run DFS from each unvisited node
+  for (const phase of phases) {
+    if (state.get(phase.id) === 0) {
+      dfs(phase.id);
+    }
+  }
+
+  return cycles;
+}
+
+/**
  * Handle spec validation
  */
 export async function handleValidate(
@@ -64,23 +187,23 @@ export async function handleValidate(
   let score = 100;
 
   // Check problem statement
-  if (!spec.problem || spec.problem.length < 20) {
+  if (!spec.problem || spec.problem.length < VALIDATION_CONFIG.MIN_PROBLEM_LENGTH) {
     issues.push({
       severity: 'error',
       field: 'problem',
-      message: 'Problem statement is missing or too brief',
+      message: `Problem statement is missing or too brief (minimum ${VALIDATION_CONFIG.MIN_PROBLEM_LENGTH} characters)`,
     });
-    score -= 15;
+    score -= VALIDATION_CONFIG.PROBLEM_MISSING_PENALTY;
   }
 
   // Check user persona
-  if (!spec.userPersona || spec.userPersona.length < 10) {
+  if (!spec.userPersona || spec.userPersona.length < VALIDATION_CONFIG.MIN_USER_PERSONA_LENGTH) {
     issues.push({
       severity: 'warning',
       field: 'userPersona',
-      message: 'User persona is missing or too brief',
+      message: `User persona is missing or too brief (minimum ${VALIDATION_CONFIG.MIN_USER_PERSONA_LENGTH} characters)`,
     });
-    score -= 5;
+    score -= VALIDATION_CONFIG.USER_PERSONA_MISSING_PENALTY;
   }
 
   // Check success metrics
@@ -90,14 +213,14 @@ export async function handleValidate(
       field: 'successMetrics',
       message: 'No success metrics defined',
     });
-    score -= 15;
+    score -= VALIDATION_CONFIG.SUCCESS_METRICS_MISSING_PENALTY;
   } else if (spec.successMetrics.filter(m => m.priority === 'primary').length === 0) {
     issues.push({
       severity: 'warning',
       field: 'successMetrics',
       message: 'No primary success metric defined',
     });
-    score -= 5;
+    score -= VALIDATION_CONFIG.PRIMARY_METRIC_MISSING_PENALTY;
   }
 
   // Check acceptance criteria
@@ -107,7 +230,7 @@ export async function handleValidate(
       field: 'acceptanceCriteria',
       message: 'No acceptance criteria defined',
     });
-    score -= 15;
+    score -= VALIDATION_CONFIG.ACCEPTANCE_CRITERIA_MISSING_PENALTY;
   } else {
     const nonTestable = spec.acceptanceCriteria.filter(ac => !ac.testable);
     if (nonTestable.length > 0) {
@@ -116,7 +239,7 @@ export async function handleValidate(
         field: 'acceptanceCriteria',
         message: `${nonTestable.length} acceptance criteria are not testable`,
       });
-      score -= 5;
+      score -= VALIDATION_CONFIG.NON_TESTABLE_CRITERIA_PENALTY;
     }
   }
 
@@ -127,9 +250,9 @@ export async function handleValidate(
       field: 'phases',
       message: 'No execution phases defined',
     });
-    score -= 15;
+    score -= VALIDATION_CONFIG.PHASES_MISSING_PENALTY;
   } else {
-    // Check for circular dependencies
+    // Check for unknown dependencies
     const phaseIds = new Set(spec.phases.map(p => p.id));
     for (const phase of spec.phases) {
       for (const dep of phase.dependencies) {
@@ -139,9 +262,20 @@ export async function handleValidate(
             field: `phases.${phase.id}.dependencies`,
             message: `Unknown dependency: ${dep}`,
           });
-          score -= 10;
+          score -= VALIDATION_CONFIG.UNKNOWN_DEPENDENCY_PENALTY;
         }
       }
+    }
+
+    // Detect circular dependencies using DFS
+    const cycles = detectCircularDependencies(spec.phases);
+    for (const cycle of cycles) {
+      issues.push({
+        severity: 'error',
+        field: 'phases.dependencies',
+        message: `Circular dependency detected: ${cycle}`,
+      });
+      score -= VALIDATION_CONFIG.CIRCULAR_DEPENDENCY_PENALTY;
     }
 
     // Check for tasks
@@ -152,7 +286,7 @@ export async function handleValidate(
           field: `phases.${phase.id}.tasks`,
           message: `Phase "${phase.name}" has no tasks`,
         });
-        score -= 5;
+        score -= VALIDATION_CONFIG.EMPTY_PHASE_TASKS_PENALTY;
       }
     }
   }
@@ -165,7 +299,7 @@ export async function handleValidate(
       message: 'No checkpoints defined - consider adding human-in-the-loop validation',
     });
     recommendations.push('Add checkpoints for critical decisions');
-    score -= 5;
+    score -= VALIDATION_CONFIG.CHECKPOINTS_MISSING_PENALTY;
   }
 
   // Check constraints
@@ -186,7 +320,7 @@ export async function handleValidate(
       message: 'No risks identified',
     });
     recommendations.push('Identify potential risks and mitigations');
-    score -= 5;
+    score -= VALIDATION_CONFIG.RISKS_MISSING_PENALTY;
   }
 
   // Check estimates
@@ -207,7 +341,7 @@ export async function handleValidate(
       message: 'No codebase context available',
     });
     recommendations.push('Run elenchus_analyze to understand the codebase');
-    score -= 5;
+    score -= VALIDATION_CONFIG.CODEBASE_CONTEXT_MISSING_PENALTY;
   }
 
   // Generate recommendations based on issues
@@ -215,7 +349,7 @@ export async function handleValidate(
     recommendations.unshift('Fix all errors before proceeding to execution');
   }
 
-  if (score >= 80 && issues.filter(i => i.severity === 'error').length === 0) {
+  if (score >= VALIDATION_CONFIG.READY_SCORE_THRESHOLD && issues.filter(i => i.severity === 'error').length === 0) {
     recommendations.push('Specification is ready for execution');
   }
 

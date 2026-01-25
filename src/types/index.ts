@@ -4,7 +4,7 @@
  * Central export for all types used across the system.
  */
 
-// Epic types
+// Epic types (including result interfaces)
 export {
   type Epic,
   type EpicSource,
@@ -66,7 +66,7 @@ export {
   AnswerInputSchema,
 } from './interrogation.js';
 
-// Specification types
+// Specification types (including output interfaces)
 export {
   type Specification,
   type Metric,
@@ -98,3 +98,10 @@ export {
   CheckpointSchema,
   GenerateSpecInputSchema,
 } from './spec.js';
+
+// Re-export utility types for convenience
+export type {
+  // Error types
+  ValidationIssue,
+  ValidationResult,
+} from './validation.js';
