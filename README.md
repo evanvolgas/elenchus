@@ -34,7 +34,7 @@ Elenchus uses a **hybrid approach**:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/elenchus.git
+git clone https://github.com/evanvolgas/elenchus.git
 cd elenchus
 
 # Install dependencies
@@ -130,10 +130,12 @@ Repeat until clarity score reaches 70%+.
 Use elenchus_generate_spec to create the agent-ready specification
 ```
 
-Outputs in three formats:
+Outputs in your choice of format (default: markdown for token efficiency):
+- **Markdown**: Human-readable for review (default)
 - **YAML**: Machine-readable for agent consumption
-- **Markdown**: Human-readable for review
 - **JSON**: Structured task graph for orchestration
+
+Use `format: 'all'` to get all formats, or `includeRawSpec: true` for the full spec object.
 
 ### 6. Validate and Execute
 
@@ -152,6 +154,7 @@ Use elenchus_validate to check the spec is complete
 | `elenchus_generate_spec` | Create agent-ready specification |
 | `elenchus_validate` | Validate spec completeness and readiness |
 | `elenchus_status` | Check status of epics, sessions, or specs |
+| `elenchus_health` | Server health check with storage connectivity and metrics |
 
 ## Workflow Diagram
 
@@ -210,10 +213,10 @@ await elenchus_answer({
 
 // 5. Generate spec when ready
 const spec = await elenchus_generate_spec({
-  sessionId: session.session.id,
-  format: 'all'
+  sessionId: session.session.id
 });
-// Returns: { spec: {...}, yaml: '...', markdown: '...', json: '...' }
+// Returns: { summary: {...}, markdown: '...' }
+// Use format: 'all' and includeRawSpec: true for full output
 ```
 
 ## Specification Output
@@ -284,11 +287,13 @@ elenchus/
 │   │   ├── answer.ts
 │   │   ├── generate-spec.ts
 │   │   ├── validate.ts
-│   │   └── status.ts
+│   │   ├── status.ts
+│   │   └── health.ts
 │   ├── resources/         # MCP resources
 │   ├── storage/           # SQLite persistence
 │   ├── types/             # TypeScript definitions
 │   └── utils/             # Helpers
+├── tests/                 # Test files
 ├── dist/                  # Compiled output
 └── package.json
 ```
