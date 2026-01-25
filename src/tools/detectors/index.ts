@@ -3,6 +3,7 @@ import { detectPython } from './python-detector.js';
 import { detectTypeScript } from './typescript-detector.js';
 import { detectGo } from './go-detector.js';
 import { detectPHP } from './php-detector.js';
+import { logger } from '../../utils/logger.js';
 
 /**
  * Detect all programming languages used in a codebase
@@ -30,8 +31,8 @@ export function detectAllLanguages(rootPath: string): DetectedLanguage[] {
         totalFiles += result.fileCount;
       }
     } catch (error) {
-      // Ignore detector errors and continue
-      console.error(`Language detector error:`, error);
+      // Log detector errors but continue with other detectors
+      logger.warn('Language detector failed', error, { detector: detector.name });
     }
   }
 

@@ -130,9 +130,11 @@ describe('id utilities', () => {
       // This is a sanity check that our ID has reasonable length
       const id = generateId('test');
       // ID format: prefix-timestamp-random
-      // We need to find the random part after the last hyphen
-      const lastHyphenIndex = id.lastIndexOf('-');
-      const randomPart = id.slice(lastHyphenIndex + 1);
+      // Split by first two hyphens to get random part (which may contain hyphens)
+      const parts = id.split('-');
+      // Random part is everything after prefix and timestamp
+      // Join remaining parts in case random portion contains hyphens (base64url includes '-')
+      const randomPart = parts.slice(2).join('-');
 
       // 12 characters of base64url = ~72 bits of entropy
       expect(randomPart.length).toBeGreaterThanOrEqual(10);

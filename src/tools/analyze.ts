@@ -17,6 +17,21 @@ import { logger } from '../utils/logger.js';
 import { validatePath, sanitizeGlobPattern, InvalidPathError, PathTraversalError } from '../utils/path-security.js';
 
 /**
+ * Common ignore patterns for glob operations.
+ * Extracted as a constant to ensure consistency and reduce duplication.
+ */
+const COMMON_IGNORE_PATTERNS = [
+  'node_modules/**',
+  'dist/**',
+  'build/**',
+  '.git/**',
+  'venv/**',
+  '.venv/**',
+  'vendor/**',
+  '__pycache__/**',
+] as const;
+
+/**
  * Tool definition for codebase analysis
  */
 export const analyzeTool: Tool = {
@@ -172,7 +187,7 @@ function detectMaturity(
   try {
     const files = glob.sync('**/*.{ts,tsx,js,jsx,py,go,rs,php}', {
       cwd: rootPath,
-      ignore: ['node_modules/**', 'dist/**', 'build/**', '.git/**', 'venv/**', '.venv/**', 'vendor/**'],
+      ignore: [...COMMON_IGNORE_PATTERNS],
     });
     fileCount = files.length;
 
@@ -367,14 +382,16 @@ function detectPrimaryLanguage(
     if ('typescript' in deps) return 'TypeScript';
   }
 
-  // Check for other language files
-  const pyFiles = glob.sync('**/*.py', { cwd: rootPath, ignore: ['node_modules/**'] });
+  // Check for other language files using shared ignore patterns
+  const ignorePatterns = [...COMMON_IGNORE_PATTERNS];
+
+  const pyFiles = glob.sync('**/*.py', { cwd: rootPath, ignore: ignorePatterns });
   if (pyFiles.length > 0) return 'Python';
 
-  const goFiles = glob.sync('**/*.go', { cwd: rootPath, ignore: ['node_modules/**'] });
+  const goFiles = glob.sync('**/*.go', { cwd: rootPath, ignore: ignorePatterns });
   if (goFiles.length > 0) return 'Go';
 
-  const rsFiles = glob.sync('**/*.rs', { cwd: rootPath, ignore: ['node_modules/**'] });
+  const rsFiles = glob.sync('**/*.rs', { cwd: rootPath, ignore: ignorePatterns });
   if (rsFiles.length > 0) return 'Rust';
 
   return 'JavaScript';
@@ -415,33 +432,18 @@ function analyzeTestCoverage(rootPath: string): CodebaseContext['testCoverage'] 
   let testFramework: string | undefined;
   let testCommand: string | undefined;
 
-  // Check for test files across all languages
+  // Check for test files across all languages with a single glob call
+  // Using brace expansion to match multiple test file patterns efficiently
   try {
-    const ignorePatterns = ['node_modules/**', 'dist/**', 'venv/**', '.venv/**', 'vendor/**', '__pycache__/**'];
+    const testFiles = glob.sync(
+      '**/{*.{test,spec}.{ts,tsx,js,jsx},test_*.py,*_test.py,*_test.go}',
+      {
+        cwd: rootPath,
+        ignore: [...COMMON_IGNORE_PATTERNS],
+      }
+    );
 
-    // JavaScript/TypeScript test patterns
-    const jsTestFiles = glob.sync('**/*.{test,spec}.{ts,tsx,js,jsx}', {
-      cwd: rootPath,
-      ignore: ignorePatterns,
-    });
-
-    // Python test patterns (test_*.py or *_test.py)
-    const pyTestFiles = glob.sync('**/test_*.py', {
-      cwd: rootPath,
-      ignore: ignorePatterns,
-    });
-    const pyTestFiles2 = glob.sync('**/*_test.py', {
-      cwd: rootPath,
-      ignore: ignorePatterns,
-    });
-
-    // Go test patterns (*_test.go)
-    const goTestFiles = glob.sync('**/*_test.go', {
-      cwd: rootPath,
-      ignore: ignorePatterns,
-    });
-
-    hasTests = jsTestFiles.length > 0 || pyTestFiles.length > 0 || pyTestFiles2.length > 0 || goTestFiles.length > 0;
+    hasTests = testFiles.length > 0;
   } catch (error) {
     logger.warn('Failed to glob test files', error, { rootPath });
   }
@@ -681,7 +683,7 @@ function findRelevantFiles(rootPath: string, focusAreas: string[]): FileReferenc
     try {
       const matches = glob.sync(`**/*${area}*`, {
         cwd: rootPath,
-        ignore: ['node_modules/**', 'dist/**', '.git/**'],
+        ignore: [...COMMON_IGNORE_PATTERNS],
         nodir: true,
       });
       for (const match of matches.slice(0, 5)) {
