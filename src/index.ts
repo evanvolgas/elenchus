@@ -13,6 +13,7 @@ import { ElenchusServer } from './server.js';
 
 async function main(): Promise<void> {
   const server = new ElenchusServer();
+  serverInstance = server;
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
@@ -31,7 +32,20 @@ async function main(): Promise<void> {
   await server.start();
 }
 
-main().catch((error) => {
+// Track server instance for cleanup on fatal errors
+let serverInstance: ElenchusServer | null = null;
+
+main().catch(async (error) => {
   console.error('Fatal error:', error);
+
+  // Ensure proper cleanup on fatal errors to prevent data corruption
+  if (serverInstance) {
+    try {
+      await serverInstance.stop();
+    } catch (cleanupError) {
+      console.error('Error during cleanup:', cleanupError);
+    }
+  }
+
   process.exit(1);
 });

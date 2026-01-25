@@ -10,6 +10,27 @@ import { validateTool, handleValidate } from './validate.js';
 import { statusTool, handleStatus } from './status.js';
 
 /**
+ * Error codes for programmatic error handling.
+ */
+export const ErrorCodes = {
+  UNKNOWN_TOOL: 'UNKNOWN_TOOL',
+  INVALID_ARGUMENTS: 'INVALID_ARGUMENTS',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  NOT_FOUND: 'NOT_FOUND',
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+} as const;
+
+/**
+ * Structured error response for MCP tool calls.
+ */
+interface ErrorResponse {
+  error: true;
+  code: keyof typeof ErrorCodes;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+/**
  * Register all MCP tools
  */
 export function registerTools(): Tool[] {
@@ -25,7 +46,34 @@ export function registerTools(): Tool[] {
 }
 
 /**
- * Handle tool calls
+ * Validate that args is a proper object (not null, not array).
+ */
+function validateArgs(args: unknown): args is Record<string, unknown> {
+  return (
+    args !== null &&
+    typeof args === 'object' &&
+    !Array.isArray(args)
+  );
+}
+
+/**
+ * Create a structured error response.
+ */
+function createErrorResponse(
+  code: keyof typeof ErrorCodes,
+  message: string,
+  details?: Record<string, unknown>
+): ErrorResponse {
+  return {
+    error: true,
+    code,
+    message,
+    ...(details && { details }),
+  };
+}
+
+/**
+ * Handle tool calls with input validation and structured error responses.
  */
 export async function handleToolCall(
   name: string,
@@ -33,6 +81,26 @@ export async function handleToolCall(
   storage: Storage
 ): Promise<{ content: TextContent[] }> {
   try {
+    // Validate args is a proper object
+    if (!validateArgs(args)) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              createErrorResponse(
+                'INVALID_ARGUMENTS',
+                'Arguments must be a non-null object',
+                { received: typeof args }
+              ),
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
     let result: unknown;
 
     switch (name) {
@@ -78,11 +146,27 @@ export async function handleToolCall(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+
+    // Determine error code based on error type/message
+    let code: keyof typeof ErrorCodes = 'INTERNAL_ERROR';
+    if (message.includes('not found') || message.includes('Not found')) {
+      code = 'NOT_FOUND';
+    } else if (error instanceof Error && error.name === 'ZodError') {
+      code = 'VALIDATION_ERROR';
+    }
+
+    // Log error with context for debugging (to stderr, doesn't interfere with MCP)
+    console.error(`Tool error [${name}]:`, error);
+
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({ error: true, message }, null, 2),
+          text: JSON.stringify(
+            createErrorResponse(code, message),
+            null,
+            2
+          ),
         },
       ],
     };
