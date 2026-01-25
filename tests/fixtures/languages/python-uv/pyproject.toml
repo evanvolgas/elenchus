@@ -1,0 +1,16 @@
+[project]
+name = "test-uv-project"
+version = "0.1.0"
+description = "Test UV project"
+dependencies = ["fastapi>=0.100.0", "pydantic>=2.0.0", "httpx>=0.24.0"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.mypy]
+strict = true

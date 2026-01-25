@@ -11,6 +11,7 @@ import {
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { glob } from 'glob';
+import { detectAllLanguages } from './detectors/index.js';
 
 /**
  * Tool definition for codebase analysis
@@ -83,14 +84,26 @@ export async function handleAnalyze(
   const riskAreas = assessRisks(rootPath, maturity);
   const relevantFiles = findRelevantFiles(rootPath, input.focusAreas ?? []);
 
+  // Multi-language detection
+  const detectedLanguages = detectAllLanguages(rootPath);
+  const primaryLanguage = detectedLanguages.length > 0
+    ? (detectedLanguages[0]?.name ?? 'Unknown')
+    : detectPrimaryLanguage(rootPath, packageJson);
+
+  // Aggregate frameworks from all detected languages
+  const allFrameworks = detectedLanguages.flatMap((lang) => lang.frameworks);
+  const legacyFrameworks = detectFrameworks(packageJson);
+  const frameworks = [...new Set([...allFrameworks, ...legacyFrameworks])];
+
   const context: CodebaseContext = {
     analyzedAt: now,
     rootPath,
     analysisDepth: input.depth,
     maturity,
     architecture,
-    primaryLanguage: detectPrimaryLanguage(rootPath, packageJson),
-    frameworks: detectFrameworks(packageJson),
+    primaryLanguage,
+    detectedLanguages,
+    frameworks,
     conventions,
     suggestedPatterns: [],
     dependencies,

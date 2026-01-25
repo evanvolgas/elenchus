@@ -1,0 +1,528 @@
+{
+  "id": "spec-1769301124101-ehdo3ca",
+  "epicId": "epic-1769300705114-lnth312",
+  "sessionId": "session-1769300836267-vm0vs1r",
+  "version": 1,
+  "problem": "Enable Elenchus to properly detect and analyze Python, TypeScript, PHP, and Go projects. Currently Python detection fails for pyproject.toml-based projects (especially uv-managed). This blocks accurate codebase analysis needed for spec generation.",
+  "userPersona": "Both Elenchus users analyzing their own codebases and AI agents using Elenchus to understand project structure before generating specs.",
+  "successMetrics": [
+    {
+      "name": "Criterion: [ ] `hasTests: true` when `tes...",
+      "description": "[ ] `hasTests: true` when `tests/test_*.py` files exist",
+      "target": "Pass",
+      "measurement": "Test or manual verification",
+      "priority": "secondary"
+    },
+    {
+      "name": "Criterion: [ ] `hasLinting: true` when `[...",
+      "description": "[ ] `hasLinting: true` when `[tool.ruff]` or similar configured",
+      "target": "Pass",
+      "measurement": "Test or manual verification",
+      "priority": "secondary"
+    },
+    {
+      "name": "Criterion: [ ] `dependencies` populated f...",
+      "description": "[ ] `dependencies` populated from pyproject.toml",
+      "target": "Pass",
+      "measurement": "Test or manual verification",
+      "priority": "secondary"
+    }
+  ],
+  "outOfScope": [
+    "Deep dependency resolution (just detect dependencies from manifest files). Full AST parsing of source code. Support for less common package managers. Migration tools."
+  ],
+  "codebaseContext": {
+    "analyzedAt": "2026-01-25T00:17:22.926Z",
+    "rootPath": ".",
+    "analysisDepth": "deep",
+    "maturity": "established",
+    "architecture": "hybrid",
+    "primaryLanguage": "Python",
+    "frameworks": [],
+    "conventions": [
+      {
+        "type": "file-structure",
+        "pattern": "src/ directory for source code",
+        "examples": [
+          "src/index.ts",
+          "src/components/"
+        ],
+        "confidence": 80
+      },
+      {
+        "type": "testing",
+        "pattern": "tests/ directory for tests",
+        "examples": [
+          "tests/component.test.ts"
+        ],
+        "confidence": 80
+      }
+    ],
+    "suggestedPatterns": [],
+    "dependencies": [],
+    "testCoverage": {
+      "overallPercentage": 0,
+      "hasTests": false,
+      "criticalPathsCovered": false
+    },
+    "hasTypeScript": false,
+    "hasLinting": false,
+    "hasCICD": true,
+    "riskAreas": [
+      {
+        "area": "Type Safety",
+        "level": "medium",
+        "reason": "No TypeScript configuration found. Type errors may go undetected.",
+        "mitigations": [
+          "Consider adding TypeScript",
+          "Use JSDoc for type hints"
+        ]
+      }
+    ],
+    "relevantFiles": [
+      {
+        "path": ".env.example",
+        "relevance": 80,
+        "reason": "Configuration file"
+      }
+    ],
+    "contextFiles": {
+      "claudeMd": "# Engram Agent Guide\n\n**What is Engram**: Memory you can trust. A memory system for AI applications that preserves ground truth, tracks confidence, and prevents hallucinations.\n\n**Status**: Beta. 800+ tests. Core APIs, REST endpoints, and workflows fully implemented.\n\n**Your Role**: Python backend engineer building a memory layer for AI agents. You write production-grade code with comprehensive tests.\n\n**Design Philosophy**: Ground truth preservation, auditable confidence, deferred consolidation.\n\n---\n\n## Boundaries\n\n### Always Do (No Permission Needed)\n\n- Write complete, production-grade code (no TODOs, no placeholders)\n- Add tests for all new features (test both success and error cases)\n- Use type hints (mypy strict mode)\n- Follow async/await patterns for all database operations\n- Update README.md when adding user-facing features\n- Add docstrings to public functions\n- **Use Pydantic for ALL data models** — no dataclasses, no TypedDict, no NamedTuple\n- **Use Pydantic AI for ALL LLM interactions** — structured outputs, type-safe responses\n\n### Ask First\n\n- Modifying database models (affects migrations)\n- Changing API contracts (breaking for consumers)\n- Adding new dependencies to pyproject.toml\n- Deleting existing endpoints or models\n- Refactoring core services (storage, extraction, consolidation)\n\n### Never Do\n\n**GitHub Issues**:\n- NEVER close an issue unless ALL acceptance criteria are met\n- If an issue has checkboxes, ALL boxes must be checked before closing\n- If you can't complete all criteria, leave the issue open and comment on what remains\n\n**Git**:\n- NEVER commit directly to main - always use a feature branch and PR\n- NEVER push directly to main - all changes must go through pull requests\n- NEVER force push to shared branches\n- Do NOT include \"Co-Authored-By: Claude\" or the \"Generated with Claude Code\" footer\n\n**Security**:\n- NEVER commit credentials, API keys, tokens, or passwords\n- Use environment variables (.env is in .gitignore)\n- Pre-commit check: `grep -r \"sk-\\|sk-ant-\\|AIza\" src/ tests/ && echo \"SECRETS FOUND\" || echo \"OK\"`\n\n**Code Quality**:\n- Skip tests to make builds pass\n- Disable type checking or linting\n- Leave TODO comments in production code\n- Delete failing tests instead of fixing them\n\n---\n\n## Commands\n\n```bash\n# Setup\nuv sync --extra dev\n\n# Run tests\nuv run pytest tests/ -v --no-cov\n\n# Code quality\nuv run ruff check src/engram/\nuv run ruff format src/engram/\nuv run mypy src/engram/\n\n# Pre-commit\nuv run pre-commit install\nuv run pre-commit run --all-files\n\n# Start REST API server\nuv run uvicorn engram.api.app:app --port 8000\n```\n\n---\n\n## REST API\n\nAll endpoints are prefixed with `/api/v1`. Key endpoints:\n\n| Endpoint | Method | Description |\n|----------|--------|-------------|\n| `/encode` | POST | Store episode + extract structured data |\n| `/encode/batch` | POST | Bulk import (up to 100 items) |\n| `/recall` | POST | Semantic search across memory types |\n| `/memories/{id}` | GET | Get specific memory |\n| `/memories/{id}` | DELETE | Delete memory (with cascade options) |\n| `/memories/{id}/verify` | GET | Trace memory to source |\n| `/workflows/consolidate` | POST | Episodes → Semantic memories |\n| `/workflows/promote` | POST | Semantic → Procedural |\n\nSee `docs/api.md` for full documentation.\n\n---\n\n## Key Concepts\n\n### Memory Types (5)\n\n| Type | Purpose | Confidence |\n|------|---------|------------|\n| Working | Current session context (in-memory, not persisted) | N/A |\n| Episode | Immutable ground truth (raw interactions) | N/A (verbatim) |\n| StructuredMemory | Per-episode LLM extraction (entities, summary, negations) | 0.8-0.9 |\n| SemanticMemory | Cross-episode LLM synthesis | 0.6 (inferred) |\n| ProceduralMemory | Behavioral patterns | 0.6 (inferred) |\n\n### Confidence Scoring\n\nConfidence = weighted sum of:\n- **Extraction method** (50%): verbatim=1.0, extracted=0.9, inferred=0.6\n- **Corroboration** (25%): number of supporting sources\n- **Recency** (15%): how recently confirmed\n- **Verification** (10%): format validation passed\n\n### Extraction Methods\n\n| Method | Base Score | Description |\n|--------|------------|-------------|\n| VERBATIM | 1.0 | Exact quote, immutable |\n| EXTRACTED | 0.9 | Deterministic pattern match (regex, validators) |\n| INFERRED | 0.6 | LLM-derived, uncertain |\n\n### Consolidation Flow\n\n1. Episode stored (ground truth, never modified)\n2. StructuredMemory created immediately (regex: emails, phones, URLs)\n3. Optional LLM enrichment (dates, people, preferences, negations → StructuredMemory)\n4. Background consolidation (N episodes → 1 SemanticMemory)\n5. Procedural synthesis (all SemanticMemories → 1 behavioral profile per user)\n6. Decay applied over time (confidence decreases without confirmation)\n\n---\n\n## Scientific Claims\n\nBe careful about claims regarding cognitive science foundations. Engram is **inspired by** cognitive science, not a strict implementation of it.\n\n### What we can claim:\n- Multiple memory types are a useful engineering abstraction\n- Ground truth preservation solves a real problem (LLM extraction errors)\n- Confidence tracking distinguishes certain from uncertain\n- Deferred processing reduces cost and latency\n- Some form of forgetting is necessary for relevance and performance\n\n### What we should NOT claim:\n- That our architecture mirrors how the brain actually works\n- That episodic/semantic are cleanly separable (they're not — it's a continuum)\n- That consolidation works exactly as we model it (heavily debated)\n- That Ebbinghaus decay is the definitive model of forgetting (it's a simplification)\n- That Atkinson-Shiffrin is current (Baddeley's Working Memory Model superseded it)\n\n---\n\n## Development Workflow\n\n```bash\n# 1. Create branch (never work on main)\ngit checkout -b feature/my-feature\n\n# 2. Make changes, run tests\nuv run pytest tests/ -v --no-cov\n\n# 3. Format and type check\nuv run ruff check src/engram/ && uv run ruff format src/engram/ && uv run mypy src/engram/\n\n# 4. Commit, push, create PR\ngit push -u origin feature/my-feature\n```\n\n---\n\n## Pydantic (Required for All Data Models)\n\nAll data structures MUST use Pydantic. No exceptions.\n\n### Model Pattern\n\n```python\nfrom pydantic import BaseModel, ConfigDict, Field\n\nclass MyModel(BaseModel):\n    \"\"\"Always add docstrings.\"\"\"\n\n    model_config = ConfigDict(extra=\"forbid\")  # Catch typos\n\n    id: str = Field(description=\"Unique identifier\")\n    value: float = Field(ge=0.0, le=1.0, description=\"Bounded value\")\n    items: list[str] = Field(default_factory=list)\n```\n\n### Rules\n\n- `ConfigDict(extra=\"forbid\")` on all models (catches field typos)\n- Use `Field()` for validation constraints and descriptions\n- Use `model_dump(mode=\"json\")` for serialization\n- Use `model_validate()` for deserialization\n- Never use `@dataclass`, `TypedDict`, or `NamedTuple`\n\n### Settings Pattern\n\n```python\nfrom pydantic import Field\nfrom pydantic_settings import BaseSettings, SettingsConfigDict\n\nclass Settings(BaseSettings):\n    model_config = SettingsConfigDict(env_prefix=\"ENGRAM_\")\n\n    api_key: str | None = Field(default=None)\n    debug: bool = Field(default=False)\n```\n\n---\n\n## Pydantic AI (Required for All LLM Interactions)\n\nAll LLM calls MUST use Pydantic AI with structured outputs. No raw API calls.\n\n### Basic Pattern\n\n```python\nfrom pydantic import BaseModel\nfrom pydantic_ai import Agent\n\nclass ExtractedFacts(BaseModel):\n    \"\"\"Structured output from LLM extraction.\"\"\"\n    facts: list[str]\n    confidence: float\n    reasoning: str\n\nextraction_agent = Agent(\n    \"openai:gpt-4o-mini\",\n    result_type=ExtractedFacts,\n    system_prompt=\"Extract factual statements from the conversation.\",\n)\n\nasync def extract_facts(text: str) -> ExtractedFacts:\n    result = await extraction_agent.run(text)\n    return result.data  # Type-safe ExtractedFacts\n```\n\n### Consolidation Agent Example\n\n```python\nfrom pydantic import BaseModel\nfrom pydantic_ai import Agent\n\nclass ConsolidationResult(BaseModel):\n    \"\"\"Output from memory consolidation.\"\"\"\n    semantic_facts: list[str]\n    links: list[tuple[str, str]]  # (memory_id, related_id)\n    pruned_ids: list[str]\n    confidence: float\n\nconsolidation_agent = Agent(\n    \"openai:gpt-4o-mini\",\n    result_type=ConsolidationResult,\n    system_prompt=\"\"\"\n    Analyze episodes and extract semantic knowledge.\n    Identify relationships between memories.\n    Flag weak associations for pruning.\n    \"\"\",\n)\n```\n\n### Why Pydantic AI?\n\n- **Type safety**: Responses are validated Pydantic models, not raw dicts\n- **Structured outputs**: LLM returns exactly what you expect\n- **Retries**: Automatic retry on validation failures\n- **Observability**: Built-in logging and tracing\n\n---\n\n## Key Files\n\n| File | Purpose |\n|------|---------|\n| `models/` | Pydantic models for all memory types |\n| `storage/` | Qdrant client and collection management |\n| `extraction/` | Pattern matchers and LLM extractors (Pydantic AI agents) |\n| `consolidation/` | Background processing workflows (Pydantic AI agents) |\n| `config.py` | Settings and confidence weights |\n| `api/router.py` | REST API endpoints |\n| `api/schemas.py` | Request/response Pydantic models |\n| `api/auth.py` | Authentication and rate limiting |\n| `context.py` | Memory context manager for SDK usage |\n\n---\n\n## Memory Types Detail\n\nMemory types are engineering constructs:\n- **Working, Episodic, Semantic, Procedural** — Inspired by cognitive science\n- **StructuredMemory** — Per-episode LLM extraction bridging raw episodes and cross-episode semantic synthesis\n\nBe explicit about which are science-inspired and which are engineering additions.\n\n---\n\n## Scientific Foundations\n\nEngram is **inspired by** cognitive science research, not a strict implementation of it. Below are the papers we cite and how they inform our design.\n\n### Research Reference Table\n\n| Paper | Year | Key Finding | Engram Implementation |\n|-------|------|-------------|----------------------|\n| [Roediger & Karpicke](https://pmc.ncbi.nlm.nih.gov/articles/PMC5912918/) | 2006 | Retrieval strengthens memory (56% vs 14% retention) | `consolidation_strength`, `consolidation_passes` |\n| [A-MEM](https://arxiv.org/abs/2502.12110) | 2025 | 2x multi-hop reasoning via Zettelkasten linking | `related_ids`, `follow_links` |\n| [Cognitive Workspace](https://arxiv.org/abs/2508.13171) | 2025 | 58.6% memory reuse vs 0% for naive RAG | Hierarchical buffers, working memory |\n| [HaluMem](https://arxiv.org/abs/2511.03506) | 2025 | <56% accuracy without ground truth preservation | Immutable episodes, `verify()` |\n| [Karpicke & Roediger](https://www.sciencedirect.com/science/article/abs/pii/S1364661310002081) | 2008 | Retrieval = rapid consolidation | Retrieval-triggered strengthening |\n\n### Testing Effect (Consolidation Strength)\n\n**What it is**: Memories that are repeatedly involved in retrieval and consolidation become stronger and more stable.\n\n**Primary Research**:\n> Roediger, H.L. & Karpicke, J.D. (2006). \"The Power of Testing Memory: Basic Research and Implications for Educational Practice.\" *Perspectives on Psychological Science*, 1(3), 181-210.\n\n**Key experimental results**:\n- After 1 week: Tested group retained **56%**, study-only group retained **14%**\n- Testing produces \"rapid consolidation\" of memory traces\n- \"Repeated remembering strengthens memories much more so than repeated learning\"\n\n**How we implement it**: During consolidation, `strengthen()` is called when existing memories:\n1. Get linked to new memories via semantic similarity\n2. Receive LLM-identified links\n3. Undergo evolution (tag/keyword/context updates)\n\nEach call increases `consolidation_strength` by 0.1 and increments `consolidation_passes`.\n\n### A-MEM (Dynamic Memory Linking)\n\n**What it is**: Agentic memory architecture using Zettelkasten-style linking for multi-hop reasoning.\n\n**Primary Research**:\n> \"A-MEM: Agentic Memory for LLM Agents\" (2025). https://arxiv.org/abs/2502.12110\n\n**Key results**:\n- **2x improvement** on multi-hop reasoning benchmarks\n- Dynamic linking outperforms static memory retrieval\n- Links enable contextual relevance across domains\n\n**How we implement it**: `related_ids` field on SemanticMemory and ProceduralMemory stores bidirectional links. During consolidation, `_find_matching_memory()` discovers links via exact, normalized, and substring matching. `follow_links=True` in `recall()` traverses links for multi-hop reasoning.\n\n### HaluMem (Ground Truth Preservation)\n\n**What it is**: Benchmark showing LLM memory systems hallucinate without source preservation.\n\n**Primary Research**:\n> \"HaluMem: Evaluating Hallucinations in Memory Systems of Agents\" (2025). https://arxiv.org/abs/2511.03506\n\n**Key results**:\n- \"All systems achieve answer accuracies below **56%**\"\n- \"Hallucination rate and omission rate remaining high\"\n- \"Systems suffer omission rates above 50%\"\n\n**How we address it**: Immutable episodic storage preserves ground truth. All derived memories (`StructuredMemory`, `SemanticMemory`) maintain `source_episode_ids` for traceability. `verify()` enables auditing any memory back to its source.\n\n### Cognitive Workspace (Hierarchical Buffers)\n\n**What it is**: Active memory curation using hierarchical buffer management.\n\n**Primary Research**:\n> \"Cognitive Workspace for AI Memory\" (2025). https://arxiv.org/abs/2508.13171\n\n**Key results**:\n- **58.6% memory reuse** vs 0% for naive RAG\n- Active curation outperforms passive retrieval\n- Hierarchical organization improves recall relevance\n\n**How we implement it**: Working memory → Episodic → StructuredMemory → SemanticMemory → ProceduralMemory hierarchy. Each tier serves different retention and retrieval purposes.\n\n### Surprise-Based Importance (Adaptive Compression)\n\n**What it is**: Novel information receives higher importance scores than redundant content.\n\n**Primary Research**:\n> Nagy et al. (2025). \"Adaptive Compression for Memory-Augmented Language Models.\" https://arxiv.org/abs/2502.14842\n\n**Key insight**: Information-theoretic surprise (low similarity to existing memories) indicates novel, valuable content worth retaining.\n\n**How we implement it**: During episode encoding, `_calculate_surprise()` computes novelty by comparing embeddings to existing memories. Low similarity = high surprise = boosted importance score. Controlled by `surprise_scoring_enabled`, `surprise_weight` (default 0.15), and `surprise_search_limit` settings.\n\n### What we DON'T implement\n\n- **Exact biological mechanisms**: We use cognitive science as inspiration, not blueprint\n- **True context selectivity**: Tomé et al. (2024) describes how engrams become more context-specific via inhibitory plasticity. We don't model this — we track consolidation involvement instead\n- **Retrieval-induced forgetting**: Removed in v0.x due to context mismatch between human lab experiments and AI systems\n\n---\n\n## Communication\n\nBe concise and direct. No flattery or excessive praise. Focus on what needs to be done.\n",
+      "agentsMd": "# Engram Agent Guide\n\n**What is Engram**: Memory you can trust. A memory system for AI applications that preserves ground truth, tracks confidence, and prevents hallucinations.\n\n**Status**: Beta. 800+ tests. Core APIs, REST endpoints, and workflows fully implemented.\n\n**Your Role**: Python backend engineer building a memory layer for AI agents. You write production-grade code with comprehensive tests.\n\n**Design Philosophy**: Ground truth preservation, auditable confidence, deferred consolidation.\n\n---\n\n## Boundaries\n\n### Always Do (No Permission Needed)\n\n- Write complete, production-grade code (no TODOs, no placeholders)\n- Add tests for all new features (test both success and error cases)\n- Use type hints (mypy strict mode)\n- Follow async/await patterns for all database operations\n- Update README.md when adding user-facing features\n- Add docstrings to public functions\n- **Use Pydantic for ALL data models** — no dataclasses, no TypedDict, no NamedTuple\n- **Use Pydantic AI for ALL LLM interactions** — structured outputs, type-safe responses\n\n### Ask First\n\n- Modifying database models (affects migrations)\n- Changing API contracts (breaking for consumers)\n- Adding new dependencies to pyproject.toml\n- Deleting existing endpoints or models\n- Refactoring core services (storage, extraction, consolidation)\n\n### Never Do\n\n**GitHub Issues**:\n- NEVER close an issue unless ALL acceptance criteria are met\n- If an issue has checkboxes, ALL boxes must be checked before closing\n- If you can't complete all criteria, leave the issue open and comment on what remains\n\n**Git**:\n- NEVER commit directly to main - always use a feature branch and PR\n- NEVER push directly to main - all changes must go through pull requests\n- NEVER force push to shared branches\n- Do NOT include \"Co-Authored-By: Claude\" or the \"Generated with Claude Code\" footer\n\n**Security**:\n- NEVER commit credentials, API keys, tokens, or passwords\n- Use environment variables (.env is in .gitignore)\n- Pre-commit check: `grep -r \"sk-\\|sk-ant-\\|AIza\" src/ tests/ && echo \"SECRETS FOUND\" || echo \"OK\"`\n\n**Code Quality**:\n- Skip tests to make builds pass\n- Disable type checking or linting\n- Leave TODO comments in production code\n- Delete failing tests instead of fixing them\n\n---\n\n## Commands\n\n```bash\n# Setup\nuv sync --extra dev\n\n# Run tests\nuv run pytest tests/ -v --no-cov\n\n# Code quality\nuv run ruff check src/engram/\nuv run ruff format src/engram/\nuv run mypy src/engram/\n\n# Pre-commit\nuv run pre-commit install\nuv run pre-commit run --all-files\n\n# Start REST API server\nuv run uvicorn engram.api.app:app --port 8000\n```\n\n---\n\n## REST API\n\nAll endpoints are prefixed with `/api/v1`. Key endpoints:\n\n| Endpoint | Method | Description |\n|----------|--------|-------------|\n| `/encode` | POST | Store episode + extract structured data |\n| `/encode/batch` | POST | Bulk import (up to 100 items) |\n| `/recall` | POST | Semantic search across memory types |\n| `/memories/{id}` | GET | Get specific memory |\n| `/memories/{id}` | DELETE | Delete memory (with cascade options) |\n| `/memories/{id}/verify` | GET | Trace memory to source |\n| `/workflows/consolidate` | POST | Episodes → Semantic memories |\n| `/workflows/promote` | POST | Semantic → Procedural |\n\nSee `docs/api.md` for full documentation.\n\n---\n\n## Key Concepts\n\n### Memory Types (5)\n\n| Type | Purpose | Confidence |\n|------|---------|------------|\n| Working | Current session context (in-memory, not persisted) | N/A |\n| Episode | Immutable ground truth (raw interactions) | N/A (verbatim) |\n| StructuredMemory | Per-episode LLM extraction (entities, summary, negations) | 0.8-0.9 |\n| SemanticMemory | Cross-episode LLM synthesis | 0.6 (inferred) |\n| ProceduralMemory | Behavioral patterns | 0.6 (inferred) |\n\n### Confidence Scoring\n\nConfidence = weighted sum of:\n- **Extraction method** (50%): verbatim=1.0, extracted=0.9, inferred=0.6\n- **Corroboration** (25%): number of supporting sources\n- **Recency** (15%): how recently confirmed\n- **Verification** (10%): format validation passed\n\n### Extraction Methods\n\n| Method | Base Score | Description |\n|--------|------------|-------------|\n| VERBATIM | 1.0 | Exact quote, immutable |\n| EXTRACTED | 0.9 | Deterministic pattern match (regex, validators) |\n| INFERRED | 0.6 | LLM-derived, uncertain |\n\n### Consolidation Flow\n\n1. Episode stored (ground truth, never modified)\n2. StructuredMemory created immediately (regex: emails, phones, URLs)\n3. Optional LLM enrichment (dates, people, preferences, negations → StructuredMemory)\n4. Background consolidation (N episodes → 1 SemanticMemory)\n5. Procedural synthesis (all SemanticMemories → 1 behavioral profile per user)\n6. Decay applied over time (confidence decreases without confirmation)\n\n---\n\n## Scientific Claims\n\nBe careful about claims regarding cognitive science foundations. Engram is **inspired by** cognitive science, not a strict implementation of it.\n\n### What we can claim:\n- Multiple memory types are a useful engineering abstraction\n- Ground truth preservation solves a real problem (LLM extraction errors)\n- Confidence tracking distinguishes certain from uncertain\n- Deferred processing reduces cost and latency\n- Some form of forgetting is necessary for relevance and performance\n\n### What we should NOT claim:\n- That our architecture mirrors how the brain actually works\n- That episodic/semantic are cleanly separable (they're not — it's a continuum)\n- That consolidation works exactly as we model it (heavily debated)\n- That Ebbinghaus decay is the definitive model of forgetting (it's a simplification)\n- That Atkinson-Shiffrin is current (Baddeley's Working Memory Model superseded it)\n\n---\n\n## Development Workflow\n\n```bash\n# 1. Create branch (never work on main)\ngit checkout -b feature/my-feature\n\n# 2. Make changes, run tests\nuv run pytest tests/ -v --no-cov\n\n# 3. Format and type check\nuv run ruff check src/engram/ && uv run ruff format src/engram/ && uv run mypy src/engram/\n\n# 4. Commit, push, create PR\ngit push -u origin feature/my-feature\n```\n\n---\n\n## Pydantic (Required for All Data Models)\n\nAll data structures MUST use Pydantic. No exceptions.\n\n### Model Pattern\n\n```python\nfrom pydantic import BaseModel, ConfigDict, Field\n\nclass MyModel(BaseModel):\n    \"\"\"Always add docstrings.\"\"\"\n\n    model_config = ConfigDict(extra=\"forbid\")  # Catch typos\n\n    id: str = Field(description=\"Unique identifier\")\n    value: float = Field(ge=0.0, le=1.0, description=\"Bounded value\")\n    items: list[str] = Field(default_factory=list)\n```\n\n### Rules\n\n- `ConfigDict(extra=\"forbid\")` on all models (catches field typos)\n- Use `Field()` for validation constraints and descriptions\n- Use `model_dump(mode=\"json\")` for serialization\n- Use `model_validate()` for deserialization\n- Never use `@dataclass`, `TypedDict`, or `NamedTuple`\n\n### Settings Pattern\n\n```python\nfrom pydantic import Field\nfrom pydantic_settings import BaseSettings, SettingsConfigDict\n\nclass Settings(BaseSettings):\n    model_config = SettingsConfigDict(env_prefix=\"ENGRAM_\")\n\n    api_key: str | None = Field(default=None)\n    debug: bool = Field(default=False)\n```\n\n---\n\n## Pydantic AI (Required for All LLM Interactions)\n\nAll LLM calls MUST use Pydantic AI with structured outputs. No raw API calls.\n\n### Basic Pattern\n\n```python\nfrom pydantic import BaseModel\nfrom pydantic_ai import Agent\n\nclass ExtractedFacts(BaseModel):\n    \"\"\"Structured output from LLM extraction.\"\"\"\n    facts: list[str]\n    confidence: float\n    reasoning: str\n\nextraction_agent = Agent(\n    \"openai:gpt-4o-mini\",\n    result_type=ExtractedFacts,\n    system_prompt=\"Extract factual statements from the conversation.\",\n)\n\nasync def extract_facts(text: str) -> ExtractedFacts:\n    result = await extraction_agent.run(text)\n    return result.data  # Type-safe ExtractedFacts\n```\n\n### Consolidation Agent Example\n\n```python\nfrom pydantic import BaseModel\nfrom pydantic_ai import Agent\n\nclass ConsolidationResult(BaseModel):\n    \"\"\"Output from memory consolidation.\"\"\"\n    semantic_facts: list[str]\n    links: list[tuple[str, str]]  # (memory_id, related_id)\n    pruned_ids: list[str]\n    confidence: float\n\nconsolidation_agent = Agent(\n    \"openai:gpt-4o-mini\",\n    result_type=ConsolidationResult,\n    system_prompt=\"\"\"\n    Analyze episodes and extract semantic knowledge.\n    Identify relationships between memories.\n    Flag weak associations for pruning.\n    \"\"\",\n)\n```\n\n### Why Pydantic AI?\n\n- **Type safety**: Responses are validated Pydantic models, not raw dicts\n- **Structured outputs**: LLM returns exactly what you expect\n- **Retries**: Automatic retry on validation failures\n- **Observability**: Built-in logging and tracing\n\n---\n\n## Key Files\n\n| File | Purpose |\n|------|---------|\n| `models/` | Pydantic models for all memory types |\n| `storage/` | Qdrant client and collection management |\n| `extraction/` | Pattern matchers and LLM extractors (Pydantic AI agents) |\n| `consolidation/` | Background processing workflows (Pydantic AI agents) |\n| `config.py` | Settings and confidence weights |\n| `api/router.py` | REST API endpoints |\n| `api/schemas.py` | Request/response Pydantic models |\n| `api/auth.py` | Authentication and rate limiting |\n| `context.py` | Memory context manager for SDK usage |\n\n---\n\n## Memory Types Detail\n\nMemory types are engineering constructs:\n- **Working, Episodic, Semantic, Procedural** — Inspired by cognitive science\n- **StructuredMemory** — Per-episode LLM extraction bridging raw episodes and cross-episode semantic synthesis\n\nBe explicit about which are science-inspired and which are engineering additions.\n\n---\n\n## Scientific Foundations\n\nEngram is **inspired by** cognitive science research, not a strict implementation of it. Below are the papers we cite and how they inform our design.\n\n### Research Reference Table\n\n| Paper | Year | Key Finding | Engram Implementation |\n|-------|------|-------------|----------------------|\n| [Roediger & Karpicke](https://pmc.ncbi.nlm.nih.gov/articles/PMC5912918/) | 2006 | Retrieval strengthens memory (56% vs 14% retention) | `consolidation_strength`, `consolidation_passes` |\n| [A-MEM](https://arxiv.org/abs/2502.12110) | 2025 | 2x multi-hop reasoning via Zettelkasten linking | `related_ids`, `follow_links` |\n| [Cognitive Workspace](https://arxiv.org/abs/2508.13171) | 2025 | 58.6% memory reuse vs 0% for naive RAG | Hierarchical buffers, working memory |\n| [HaluMem](https://arxiv.org/abs/2511.03506) | 2025 | <56% accuracy without ground truth preservation | Immutable episodes, `verify()` |\n| [Karpicke & Roediger](https://www.sciencedirect.com/science/article/abs/pii/S1364661310002081) | 2008 | Retrieval = rapid consolidation | Retrieval-triggered strengthening |\n\n### Testing Effect (Consolidation Strength)\n\n**What it is**: Memories that are repeatedly involved in retrieval and consolidation become stronger and more stable.\n\n**Primary Research**:\n> Roediger, H.L. & Karpicke, J.D. (2006). \"The Power of Testing Memory: Basic Research and Implications for Educational Practice.\" *Perspectives on Psychological Science*, 1(3), 181-210.\n\n**Key experimental results**:\n- After 1 week: Tested group retained **56%**, study-only group retained **14%**\n- Testing produces \"rapid consolidation\" of memory traces\n- \"Repeated remembering strengthens memories much more so than repeated learning\"\n\n**How we implement it**: During consolidation, `strengthen()` is called when existing memories:\n1. Get linked to new memories via semantic similarity\n2. Receive LLM-identified links\n3. Undergo evolution (tag/keyword/context updates)\n\nEach call increases `consolidation_strength` by 0.1 and increments `consolidation_passes`.\n\n### A-MEM (Dynamic Memory Linking)\n\n**What it is**: Agentic memory architecture using Zettelkasten-style linking for multi-hop reasoning.\n\n**Primary Research**:\n> \"A-MEM: Agentic Memory for LLM Agents\" (2025). https://arxiv.org/abs/2502.12110\n\n**Key results**:\n- **2x improvement** on multi-hop reasoning benchmarks\n- Dynamic linking outperforms static memory retrieval\n- Links enable contextual relevance across domains\n\n**How we implement it**: `related_ids` field on SemanticMemory and ProceduralMemory stores bidirectional links. During consolidation, `_find_matching_memory()` discovers links via exact, normalized, and substring matching. `follow_links=True` in `recall()` traverses links for multi-hop reasoning.\n\n### HaluMem (Ground Truth Preservation)\n\n**What it is**: Benchmark showing LLM memory systems hallucinate without source preservation.\n\n**Primary Research**:\n> \"HaluMem: Evaluating Hallucinations in Memory Systems of Agents\" (2025). https://arxiv.org/abs/2511.03506\n\n**Key results**:\n- \"All systems achieve answer accuracies below **56%**\"\n- \"Hallucination rate and omission rate remaining high\"\n- \"Systems suffer omission rates above 50%\"\n\n**How we address it**: Immutable episodic storage preserves ground truth. All derived memories (`StructuredMemory`, `SemanticMemory`) maintain `source_episode_ids` for traceability. `verify()` enables auditing any memory back to its source.\n\n### Cognitive Workspace (Hierarchical Buffers)\n\n**What it is**: Active memory curation using hierarchical buffer management.\n\n**Primary Research**:\n> \"Cognitive Workspace for AI Memory\" (2025). https://arxiv.org/abs/2508.13171\n\n**Key results**:\n- **58.6% memory reuse** vs 0% for naive RAG\n- Active curation outperforms passive retrieval\n- Hierarchical organization improves recall relevance\n\n**How we implement it**: Working memory → Episodic → StructuredMemory → SemanticMemory → ProceduralMemory hierarchy. Each tier serves different retention and retrieval purposes.\n\n### Surprise-Based Importance (Adaptive Compression)\n\n**What it is**: Novel information receives higher importance scores than redundant content.\n\n**Primary Research**:\n> Nagy et al. (2025). \"Adaptive Compression for Memory-Augmented Language Models.\" https://arxiv.org/abs/2502.14842\n\n**Key insight**: Information-theoretic surprise (low similarity to existing memories) indicates novel, valuable content worth retaining.\n\n**How we implement it**: During episode encoding, `_calculate_surprise()` computes novelty by comparing embeddings to existing memories. Low similarity = high surprise = boosted importance score. Controlled by `surprise_scoring_enabled`, `surprise_weight` (default 0.15), and `surprise_search_limit` settings.\n\n### What we DON'T implement\n\n- **Exact biological mechanisms**: We use cognitive science as inspiration, not blueprint\n- **True context selectivity**: Tomé et al. (2024) describes how engrams become more context-specific via inhibitory plasticity. We don't model this — we track consolidation involvement instead\n- **Retrieval-induced forgetting**: Removed in v0.x due to context mismatch between human lab experiments and AI systems\n\n---\n\n## Communication\n\nBe concise and direct. No flattery or excessive praise. Focus on what needs to be done.\n",
+      "readme": "<p align=\"center\">\n  <img src=\"assets/engram.jpg\" alt=\"Engram Logo\">\n</p>\n\n# Engram\n\n**Memory you can trust.**\n\nA memory system for AI applications that preserves ground truth, tracks confidence, and prevents hallucinations.\n\n## The Problem\n\nAI memory systems have an accuracy crisis. Recent benchmarks show:\n\n> \"All systems achieve answer accuracies below 56%, with hallucination rate and omission rate remaining high.\"\n>\n> — [HaluMem: Hallucinations in LLM Memory Systems](https://arxiv.org/html/2511.03506)\n\nThe fundamental issue: once source data is lost, errors cannot be corrected.\n\n## The Solution\n\nEngram preserves ground truth and tracks confidence:\n\n1. **Store first, derive later** — Raw conversations stored verbatim. LLM extraction happens in background where errors can be caught.\n2. **Track confidence** — Every memory carries a composite score: extraction method + corroboration + recency + verification.\n3. **Verify on retrieval** — Applications filter by confidence. High-stakes queries use only trusted memories.\n4. **Enable recovery** — Derived memories trace to sources. Errors can be corrected by re-deriving.\n\n## Quick Start\n\n### Installation\n\n```bash\n# Clone and install\ngit clone https://github.com/ashita-ai/engram.git\ncd engram\nuv sync --extra dev\n\n# Start Qdrant (vector database)\ndocker run -p 6333:6333 qdrant/qdrant\n```\n\n### Python SDK\n\n```python\nfrom engram.service import EngramService\n\nasync with EngramService.create() as engram:\n    # Store interaction (immediate, preserves ground truth)\n    result = await engram.encode(\n        content=\"My email is john@example.com\",\n        role=\"user\",\n        user_id=\"user_123\",\n    )\n    print(f\"Episode: {result.episode.id}\")\n    print(f\"Emails extracted: {result.structured.emails}\")  # [\"john@example.com\"]\n\n    # Retrieve with confidence filtering\n    memories = await engram.recall(\n        query=\"What's the user's email?\",\n        user_id=\"user_123\",\n        min_confidence=0.7,\n    )\n\n    # Verify any memory back to source\n    verified = await engram.verify(memories[0].memory_id, user_id=\"user_123\")\n    print(verified.explanation)\n```\n\n### REST API\n\n```bash\n# Start the server\nuv run uvicorn engram.api.app:app --port 8000\n\n# Encode a memory\ncurl -X POST http://localhost:8000/api/v1/encode \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"content\": \"My email is john@example.com\", \"role\": \"user\", \"user_id\": \"user_123\"}'\n\n# Recall memories\ncurl -X POST http://localhost:8000/api/v1/recall \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"query\": \"email\", \"user_id\": \"user_123\"}'\n\n# Batch encode (bulk import)\ncurl -X POST http://localhost:8000/api/v1/encode/batch \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"user_id\": \"user_123\",\n    \"items\": [\n      {\"content\": \"Message 1\", \"role\": \"user\"},\n      {\"content\": \"Response 1\", \"role\": \"assistant\"}\n    ]\n  }'\n```\n\n## Memory Types\n\n| Type | Confidence | Purpose |\n|------|------------|---------|\n| **Working** | N/A | Current session context (in-memory, volatile) |\n| **Episodic** | Highest | Ground truth, verbatim storage, immutable |\n| **Structured** | High | Per-episode extraction (emails, phones, URLs, negations) |\n| **Semantic** | Variable | Cross-episode knowledge synthesis (LLM-derived) |\n| **Procedural** | Variable | Behavioral patterns and preferences |\n\n### Memory Flow\n\n```\nEpisode (raw, immutable)\n    │\n    ├──→ Structured (per-episode: emails, phones, negations)\n    │\n    └──→ Semantic (LLM consolidation: N episodes → 1 summary)\n              │\n              └──→ Procedural (behavioral synthesis)\n```\n\n## REST API Reference\n\n### Core Endpoints\n\n| Method | Endpoint | Description |\n|--------|----------|-------------|\n| `POST` | `/encode` | Store a memory and extract facts |\n| `POST` | `/encode/batch` | Bulk import multiple memories |\n| `POST` | `/recall` | Semantic search across all memory types |\n| `GET` | `/memories/{id}` | Get a specific memory by ID |\n| `GET` | `/memories` | List memories with filters |\n| `DELETE` | `/memories/{id}` | Delete a memory (with cascade options) |\n| `PATCH` | `/memories/{id}` | Update memory content/metadata |\n| `GET` | `/memories/{id}/sources` | Trace memory to source episodes |\n| `GET` | `/memories/{id}/verify` | Verify memory with explanation |\n| `GET` | `/memories/{id}/provenance` | Full derivation chain |\n\n### Workflow Endpoints\n\n| Method | Endpoint | Description |\n|--------|----------|-------------|\n| `POST` | `/workflows/consolidate` | Episodes → Semantic memories |\n| `POST` | `/workflows/decay` | Apply confidence decay |\n| `POST` | `/workflows/promote` | Semantic → Procedural synthesis |\n| `POST` | `/workflows/structure` | LLM extraction for single episode |\n| `POST` | `/workflows/structure/batch` | LLM extraction for multiple episodes |\n\n### Additional Features\n\n| Method | Endpoint | Description |\n|--------|----------|-------------|\n| `POST` | `/memories/{id}/links` | Create memory links |\n| `GET` | `/memories/{id}/links` | List memory links |\n| `DELETE` | `/memories/{id}/links/{target}` | Remove a link |\n| `POST` | `/conflicts/detect` | Detect contradictions |\n| `GET` | `/conflicts` | List detected conflicts |\n| `POST` | `/webhooks` | Register event webhooks |\n| `GET` | `/memories/{id}/history` | Memory change history |\n| `DELETE` | `/users/{user_id}/memories` | GDPR erasure |\n\n### Session Endpoints\n\n| Method | Endpoint | Description |\n|--------|----------|-------------|\n| `GET` | `/sessions` | List sessions for a user |\n| `GET` | `/sessions/{session_id}` | Get session details with episodes |\n| `DELETE` | `/sessions/{session_id}` | Delete session (with cascade options) |\n\n## Confidence Scoring\n\nConfidence is a composite score:\n\n| Factor | Weight | Description |\n|--------|--------|-------------|\n| Extraction method | 50% | verbatim=1.0, regex=0.9, LLM=0.6 |\n| Corroboration | 25% | Number of supporting sources |\n| Recency | 15% | How recently confirmed |\n| Verification | 10% | Format validation passed |\n\nEvery score is auditable: *\"0.73 because: extracted (0.9 base), 3 sources, confirmed 2 months ago.\"*\n\n## Configuration\n\nEnvironment variables (prefix: `ENGRAM_`):\n\n| Variable | Default | Description |\n|----------|---------|-------------|\n| `ENV` | `development` | Environment: `development`, `production`, or `test` |\n| `QDRANT_URL` | `http://localhost:6333` | Qdrant connection |\n| `EMBEDDING_PROVIDER` | `fastembed` | Embedding backend |\n| `AUTH_ENABLED` | auto | Enable Bearer token auth (auto: true in production) |\n| `AUTH_SECRET_KEY` | - | Secret key for auth (required in production) |\n| `RATE_LIMIT_ENABLED` | `false` | Enable rate limiting |\n| `BATCH_ENCODE_MAX_ITEMS` | `100` | Max batch size |\n\n**Security Notes:**\n- In production (`ENGRAM_ENV=production`), auth is enabled by default\n- Using the default secret key in production will raise an error\n- Generate a secret key: `python -c \"import secrets; print(secrets.token_hex(32))\"`\n\nSee [docs/development.md](docs/development.md) for full configuration reference.\n\n## Development\n\n```bash\n# Run tests\nuv run pytest tests/ -v --no-cov\n\n# Code quality\nuv run ruff check src/engram/\nuv run mypy src/engram/\n\n# Pre-commit hooks\nuv run pre-commit install\nuv run pre-commit run --all-files\n```\n\n## Claude Code Integration\n\nEngram provides an MCP server for direct integration with Claude Code:\n\n```json\n{\n  \"mcpServers\": {\n    \"engram\": {\n      \"command\": \"uv\",\n      \"args\": [\"run\", \"--directory\", \"/path/to/engram\", \"--extra\", \"mcp\", \"python\", \"-m\", \"engram.mcp\"]\n    }\n  }\n}\n```\n\nThis exposes four tools: `engram_encode`, `engram_recall`, `engram_verify`, and `engram_stats`.\n\nSee [docs/mcp.md](docs/mcp.md) for full setup instructions.\n\n## Documentation\n\n- [Architecture](docs/architecture.md) — Memory types, data flow, storage design\n- [Development Guide](docs/development.md) — Setup, configuration, workflow\n- [API Reference](docs/api.md) — Detailed endpoint documentation\n- [MCP Integration](docs/mcp.md) — Claude Code and MCP client setup\n\n## Status\n\nBeta. Core functionality complete with comprehensive test coverage (800+ tests).\n\n## License\n\nMIT\n"
+    }
+  },
+  "constraints": [
+    {
+      "type": "technical",
+      "description": "Must support uv as primary Python package manager. Must handle large repositories efficiently (PHP repos specifically can be very large). Should detect pyproject.toml, package.json/tsconfig.json, composer.json, and go.mod respectively."
+    },
+    {
+      "type": "business",
+      "description": "Must support uv as primary Python package manager. Must handle large repositories efficiently (PHP repos specifically can be very large). Should detect pyproject.toml, package.json/tsconfig.json, composer.json, and go.mod respectively."
+    }
+  ],
+  "integrations": [],
+  "phases": [
+    {
+      "id": "phase-research",
+      "name": "Research",
+      "description": "Analyze requirements and codebase patterns",
+      "tasks": [
+        {
+          "id": "task-research-requirements",
+          "type": "research",
+          "description": "Analyze epic requirements and identify implementation approach",
+          "agentType": "researcher",
+          "agentModel": "haiku",
+          "files": [],
+          "acceptanceCriteria": [
+            "Requirements documented",
+            "Approach identified"
+          ],
+          "constraints": [],
+          "dependsOn": [],
+          "estimatedTokens": 10000,
+          "estimatedMinutes": 5
+        },
+        {
+          "id": "task-research-codebase",
+          "type": "research",
+          "description": "Identify relevant existing patterns and files",
+          "agentType": "researcher",
+          "agentModel": "haiku",
+          "files": [
+            ".env.example"
+          ],
+          "acceptanceCriteria": [
+            "Relevant files identified",
+            "Patterns documented"
+          ],
+          "constraints": [],
+          "dependsOn": [],
+          "estimatedTokens": 15000,
+          "estimatedMinutes": 8
+        }
+      ],
+      "parallel": true,
+      "dependencies": [],
+      "checkpointAfter": true,
+      "checkpointReason": "Validate research findings before architecture",
+      "estimatedDurationMinutes": 15
+    },
+    {
+      "id": "phase-architecture",
+      "name": "Architecture",
+      "description": "Design technical approach and component structure",
+      "tasks": [
+        {
+          "id": "task-design-architecture",
+          "type": "design",
+          "description": "Design component structure and data flow",
+          "agentType": "system-architect",
+          "agentModel": "sonnet",
+          "files": [],
+          "acceptanceCriteria": [
+            "Architecture documented",
+            "Data flow defined"
+          ],
+          "constraints": [],
+          "dependsOn": [
+            "task-research-requirements",
+            "task-research-codebase"
+          ],
+          "estimatedTokens": 20000,
+          "estimatedMinutes": 10
+        }
+      ],
+      "parallel": false,
+      "dependencies": [
+        "phase-research"
+      ],
+      "checkpointAfter": true,
+      "checkpointReason": "Validate architecture before implementation",
+      "estimatedDurationMinutes": 10
+    },
+    {
+      "id": "phase-implementation",
+      "name": "Implementation",
+      "description": "Build the POC",
+      "tasks": [
+        {
+          "id": "task-implement-core",
+          "type": "implement",
+          "description": "Implement core functionality",
+          "agentType": "coder",
+          "agentModel": "sonnet",
+          "files": [],
+          "acceptanceCriteria": [
+            "[ ] `hasTests: true` when `tests/test_*.py` files exist",
+            "[ ] `hasLinting: true` when `[tool.ruff]` or similar configured",
+            "[ ] `dependencies` populated from pyproject.toml"
+          ],
+          "constraints": [
+            "Must support uv as primary Python package manager. Must handle large repositories efficiently (PHP repos specifically can be very large). Should detect pyproject.toml, package.json/tsconfig.json, composer.json, and go.mod respectively."
+          ],
+          "dependsOn": [
+            "task-design-architecture"
+          ],
+          "estimatedTokens": 50000,
+          "estimatedMinutes": 30
+        }
+      ],
+      "parallel": false,
+      "dependencies": [
+        "phase-architecture"
+      ],
+      "checkpointAfter": true,
+      "checkpointReason": "Review implementation before testing",
+      "estimatedDurationMinutes": 30
+    },
+    {
+      "id": "phase-testing",
+      "name": "Testing",
+      "description": "Write and run tests",
+      "tasks": [
+        {
+          "id": "task-write-tests",
+          "type": "test",
+          "description": "Write unit and integration tests",
+          "agentType": "tester",
+          "agentModel": "sonnet",
+          "files": [],
+          "acceptanceCriteria": [
+            "Tests written",
+            "Coverage > 80%"
+          ],
+          "constraints": [],
+          "dependsOn": [
+            "task-implement-core"
+          ],
+          "estimatedTokens": 30000,
+          "estimatedMinutes": 20
+        }
+      ],
+      "parallel": false,
+      "dependencies": [
+        "phase-implementation"
+      ],
+      "checkpointAfter": false,
+      "estimatedDurationMinutes": 20
+    },
+    {
+      "id": "phase-review",
+      "name": "Review",
+      "description": "Code review and final validation",
+      "tasks": [
+        {
+          "id": "task-code-review",
+          "type": "review",
+          "description": "Review code quality, security, and best practices",
+          "agentType": "reviewer",
+          "agentModel": "sonnet",
+          "files": [],
+          "acceptanceCriteria": [
+            "No critical issues",
+            "Best practices followed"
+          ],
+          "constraints": [],
+          "dependsOn": [
+            "task-write-tests"
+          ],
+          "estimatedTokens": 15000,
+          "estimatedMinutes": 10
+        }
+      ],
+      "parallel": false,
+      "dependencies": [
+        "phase-testing"
+      ],
+      "checkpointAfter": true,
+      "checkpointReason": "Final review before delivery",
+      "estimatedDurationMinutes": 10
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "checkpoint-post-research",
+      "type": "post-research",
+      "phase": "phase-research",
+      "required": true,
+      "autoApprove": false,
+      "description": "Review research findings before proceeding to architecture",
+      "artifactTypes": [
+        "research-summary",
+        "relevant-files-list"
+      ],
+      "questionsToAsk": [
+        "Are the research findings accurate?",
+        "Should we adjust the scope based on findings?"
+      ]
+    },
+    {
+      "id": "checkpoint-post-architecture",
+      "type": "post-architecture",
+      "phase": "phase-architecture",
+      "required": true,
+      "autoApprove": false,
+      "description": "Validate architecture before implementation",
+      "artifactTypes": [
+        "architecture-diagram",
+        "tech-decisions"
+      ],
+      "questionsToAsk": [
+        "Does this architecture fit the existing codebase?",
+        "Are there any concerns with this approach?"
+      ]
+    },
+    {
+      "id": "checkpoint-post-implementation",
+      "type": "post-implementation",
+      "phase": "phase-implementation",
+      "required": true,
+      "autoApprove": false,
+      "description": "Review implementation before testing",
+      "artifactTypes": [
+        "code-diff",
+        "implementation-summary"
+      ],
+      "questionsToAsk": [
+        "Does the implementation meet requirements?",
+        "Any obvious issues to fix?"
+      ]
+    },
+    {
+      "id": "checkpoint-pre-delivery",
+      "type": "pre-delivery",
+      "phase": "phase-review",
+      "required": true,
+      "autoApprove": false,
+      "description": "Final approval before delivery",
+      "artifactTypes": [
+        "test-results",
+        "review-summary",
+        "delivery-package"
+      ],
+      "questionsToAsk": [
+        "Is the POC ready for delivery?",
+        "Any known issues to document?"
+      ]
+    }
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "ac-1",
+      "description": "[ ] `hasTests: true` when `tests/test_*.py` files exist",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "[ ] `hasTests: true` when `tests/test_*.py` files exist",
+      "priority": "must-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-2",
+      "description": "[ ] `hasLinting: true` when `[tool.ruff]` or similar configured",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "[ ] `hasLinting: true` when `[tool.ruff]` or similar configured",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-3",
+      "description": "[ ] `dependencies` populated from pyproject.toml",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "[ ] `dependencies` populated from pyproject.toml",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-4",
+      "description": "[ ] `frameworks` detects FastAPI, Pydantic, etc.",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "[ ] `frameworks` detects FastAPI, Pydantic, etc.",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-5",
+      "description": "[ ] Convention examples use Python patterns (`test_*.py`, `__init__.py`)",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "[ ] Convention examples use Python patterns (`test_*.py`, `__init__.py`)",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-6",
+      "description": "[ ] Test coverage percentage parsed from coverage reports if available",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "[ ] Test coverage percentage parsed from coverage reports if available",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-7",
+      "description": "[ ] Works for both `pyproject.toml` and legacy `setup.py` projects",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "[ ] Works for both `pyproject.toml` and legacy `setup.py` projects",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-8",
+      "description": "Project with pyproject.toml + [tool.pytest] → hasTests: true",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "Project with pyproject.toml + [tool.pytest] → hasTests: true",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-9",
+      "description": "Project with pyproject.toml + [tool.ruff] → hasLinting: true",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "Project with pyproject.toml + [tool.ruff] → hasLinting: true",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-10",
+      "description": "Project with pyproject.toml + [tool.mypy] → no \"Type Safety\" risk",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "Project with pyproject.toml + [tool.mypy] → no \"Type Safety\" risk",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-11",
+      "description": "Project with FastAPI in dependencies → frameworks: [\"FastAPI\"]",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "Project with FastAPI in dependencies → frameworks: [\"FastAPI\"]",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    },
+    {
+      "id": "ac-12",
+      "description": "Project with tests/test_*.py → convention examples show Python patterns",
+      "given": "The POC is implemented",
+      "when": "The user interacts with the feature",
+      "then": "Project with tests/test_*.py → convention examples show Python patterns",
+      "priority": "should-have",
+      "testable": true,
+      "automatable": true
+    }
+  ],
+  "testStrategy": {
+    "unitTests": true,
+    "integrationTests": true,
+    "e2eTests": false,
+    "coverageTarget": 80,
+    "notes": [
+      "Focus on critical path coverage",
+      "Mock external dependencies"
+    ]
+  },
+  "estimatedCost": {
+    "totalTokens": 140000,
+    "estimatedCostUSD": 0.95,
+    "breakdown": {
+      "phase-research": 0.05,
+      "phase-architecture": 0.1,
+      "phase-implementation": 0.5,
+      "phase-testing": 0.2,
+      "phase-review": 0.1
+    },
+    "confidence": "medium"
+  },
+  "estimatedDuration": {
+    "totalMinutes": 85,
+    "breakdown": {
+      "phase-research": 15,
+      "phase-architecture": 10,
+      "phase-implementation": 30,
+      "phase-testing": 20,
+      "phase-review": 10
+    },
+    "parallelizable": 25,
+    "confidence": "medium"
+  },
+  "risks": [
+    {
+      "id": "risk-user-identified",
+      "description": "Variety of manifest file formats across languages. Large PHP monorepos may have performance issues. Edge cases with polyglot repos containing multiple language manifests.",
+      "likelihood": "medium",
+      "impact": "medium",
+      "mitigation": "Monitor during implementation"
+    },
+    {
+      "id": "risk-scope-creep",
+      "description": "Scope may expand during implementation",
+      "likelihood": "medium",
+      "impact": "medium",
+      "mitigation": "Use checkpoints to validate scope at each phase"
+    }
+  ],
+  "readinessScore": 82,
+  "readinessIssues": [],
+  "createdAt": "2026-01-25T00:32:04.100Z",
+  "updatedAt": "2026-01-25T00:32:04.100Z"
+}

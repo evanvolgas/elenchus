@@ -110,6 +110,26 @@ export const CoverageReportSchema = z.object({
 export type CoverageReport = z.infer<typeof CoverageReportSchema>;
 
 /**
+ * Detected language with confidence and metadata
+ */
+export const DetectedLanguageSchema = z.object({
+  name: z.string(),
+  confidence: z.number().min(0).max(100),
+  fileCount: z.number().min(0),
+  percentage: z.number().min(0).max(100),
+  detectionMethod: z.enum(['manifest', 'config', 'glob']),
+  frameworks: z.array(z.string()),
+  hasTests: z.boolean(),
+  hasLinting: z.boolean(),
+  hasTypeChecking: z.boolean(),
+  manifestFiles: z.array(z.string()).optional(),
+  configFiles: z.array(z.string()).optional(),
+  lineCount: z.number().min(0).optional(),
+});
+
+export type DetectedLanguage = z.infer<typeof DetectedLanguageSchema>;
+
+/**
  * Complete codebase context
  */
 export const CodebaseContextSchema = z.object({
@@ -122,6 +142,7 @@ export const CodebaseContextSchema = z.object({
   maturity: CodebaseMaturitySchema,
   architecture: ArchitecturePatternSchema,
   primaryLanguage: z.string(),
+  detectedLanguages: z.array(DetectedLanguageSchema).optional(),
   frameworks: z.array(z.string()),
 
   // Patterns and conventions
