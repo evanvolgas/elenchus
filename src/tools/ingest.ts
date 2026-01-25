@@ -5,6 +5,7 @@ import {
   type IngestResult,
   CreateEpicInputSchema,
 } from '../types/index.js';
+import { generateId } from '../utils/id.js';
 
 /**
  * Tool definition for epic ingestion
@@ -63,7 +64,7 @@ export async function handleIngest(
   }
 
   // Generate ID
-  const id = `epic-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const id = generateId('epic');
   const now = new Date().toISOString();
 
   // Extract information from content

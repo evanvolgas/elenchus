@@ -9,6 +9,7 @@ import {
   GenerateSpecInputSchema,
 } from '../types/index.js';
 import * as yaml from 'yaml';
+import { generateId } from '../utils/id.js';
 
 /**
  * Tool definition for spec generation
@@ -81,7 +82,7 @@ export async function handleGenerateSpec(
   const context = storage.getContextForPath('.');
 
   const now = new Date().toISOString();
-  const specId = `spec-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const specId = generateId('spec');
 
   // Build specification
   const spec: Specification = {
@@ -188,7 +189,7 @@ function extractUserPersona(
   }
 
   if (epic.extractedStakeholders && epic.extractedStakeholders.length > 0) {
-    return epic.extractedStakeholders[0]!;
+    return epic.extractedStakeholders[0] ?? 'Developer or technical user';
   }
 
   return 'Developer or technical user';
@@ -498,7 +499,8 @@ function buildAcceptanceCriteria(
   const criteria: AcceptanceCriterion[] = [];
 
   for (let i = 0; i < epic.extractedAcceptanceCriteria.length; i++) {
-    const criterion = epic.extractedAcceptanceCriteria[i]!;
+    const criterion = epic.extractedAcceptanceCriteria[i];
+    if (!criterion) continue;
     criteria.push({
       id: `ac-${i + 1}`,
       description: criterion,

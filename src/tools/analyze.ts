@@ -12,6 +12,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { glob } from 'glob';
 import { detectAllLanguages } from './detectors/index.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Tool definition for codebase analysis
@@ -133,7 +134,8 @@ function readPackageJson(rootPath: string): Record<string, unknown> | null {
   try {
     const content = readFileSync(packagePath, 'utf-8');
     return JSON.parse(content) as Record<string, unknown>;
-  } catch {
+  } catch (error) {
+    logger.warn('Failed to read package.json', error, { path: packagePath });
     return null;
   }
 }
@@ -157,8 +159,8 @@ function detectMaturity(
       f.includes('.spec.') ||
       f.includes('__tests__')
     ).length;
-  } catch {
-    // Ignore glob errors
+  } catch (error) {
+    logger.warn('Failed to glob source files during maturity detection', error, { rootPath });
   }
 
   // Check for common maturity signals
@@ -360,8 +362,8 @@ function analyzeTestCoverage(rootPath: string): CodebaseContext['testCoverage'] 
       ignore: ['node_modules/**', 'dist/**'],
     });
     hasTests = testFiles.length > 0;
-  } catch {
-    // Ignore
+  } catch (error) {
+    logger.warn('Failed to glob test files', error, { rootPath });
   }
 
   // Detect test framework
@@ -373,8 +375,8 @@ function analyzeTestCoverage(rootPath: string): CodebaseContext['testCoverage'] 
       if ('vitest' in deps) testFramework = 'vitest';
       else if ('jest' in deps) testFramework = 'jest';
       else if ('mocha' in deps) testFramework = 'mocha';
-    } catch {
-      // Ignore
+    } catch (error) {
+      logger.warn('Failed to parse package.json for test framework detection', error, { packagePath });
     }
   }
 
@@ -393,7 +395,8 @@ function findContextFiles(rootPath: string): CodebaseContext['contextFiles'] {
     if (existsSync(fullPath)) {
       try {
         return readFileSync(fullPath, 'utf-8');
-      } catch {
+      } catch (error) {
+        logger.debug('Failed to read context file', error, { path: fullPath });
         return undefined;
       }
     }
@@ -495,8 +498,8 @@ function findRelevantFiles(rootPath: string, focusAreas: string[]): FileReferenc
           reason: `Matches focus area: ${area}`,
         });
       }
-    } catch {
-      // Ignore glob errors
+    } catch (error) {
+      logger.warn('Failed to glob files for focus area', error, { area, rootPath });
     }
   }
 

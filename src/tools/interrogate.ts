@@ -3,9 +3,11 @@ import type { Storage } from '../storage/index.js';
 import {
   type InterrogationSession,
   type Question,
+  type QuestionType,
   type InterrogationResult,
   InterrogateInputSchema,
 } from '../types/index.js';
+import { generateId } from '../utils/id.js';
 
 /**
  * Tool definition for interrogation
@@ -110,7 +112,7 @@ export async function handleInterrogate(
 }
 
 function createNewSession(epicId: string): InterrogationSession {
-  const id = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const id = generateId('session');
   const now = new Date().toISOString();
 
   return {
@@ -312,8 +314,8 @@ function calculateScores(session: InterrogationSession): {
       .map(q => q.type)
   );
 
-  const requiredTypes = ['scope', 'success', 'constraint'];
-  const hasRequired = requiredTypes.filter(t => answeredTypes.has(t as any)).length;
+  const requiredTypes: QuestionType[] = ['scope', 'success', 'constraint'];
+  const hasRequired = requiredTypes.filter(t => answeredTypes.has(t)).length;
   const completenessScore = 40 + (hasRequired / requiredTypes.length) * 60;
 
   return {
