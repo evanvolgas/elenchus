@@ -301,4 +301,6 @@ export interface SpecificationOutput {
   markdown?: string;
   /** JSON format - only included if format is 'json' or 'all' */
   json?: string;
+  /** Note about format handling (e.g., when 'all' is overridden) */
+  note?: string;
 }

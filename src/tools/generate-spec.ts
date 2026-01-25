@@ -195,15 +195,26 @@ export async function handleGenerateSpec(
   }
 
   // Generate only requested format(s)
+  // When 'all' is requested, only return markdown to prevent token explosion
+  // The full spec is saved to storage and can be retrieved separately
   const { format } = input;
-  if (format === 'yaml' || format === 'all') {
-    output.yaml = yaml.stringify(spec);
-  }
-  if (format === 'markdown' || format === 'all') {
+
+  if (format === 'all') {
+    // Override 'all' to just return markdown + a note
+    // This prevents the 25k+ token responses that caused truncation
     output.markdown = generateMarkdown(spec);
-  }
-  if (format === 'json' || format === 'all') {
-    output.json = JSON.stringify(spec, null, 2);
+    output.note = 'Format "all" now returns only markdown to prevent token overflow. ' +
+      'Use format="yaml" or format="json" separately if needed, or retrieve the full spec from storage.';
+  } else {
+    if (format === 'yaml') {
+      output.yaml = yaml.stringify(spec);
+    }
+    if (format === 'markdown') {
+      output.markdown = generateMarkdown(spec);
+    }
+    if (format === 'json') {
+      output.json = JSON.stringify(spec, null, 2);
+    }
   }
 
   return output;
@@ -546,21 +557,66 @@ function buildCheckpoints(): Checkpoint[] {
   ];
 }
 
+/**
+ * Maximum acceptance criteria to include in spec output.
+ * Prevents token bloat from epics with many extracted criteria.
+ */
+const MAX_ACCEPTANCE_CRITERIA = 5;
+
+/**
+ * Filter out items that look like questions or risks rather than acceptance criteria.
+ */
+function isValidAcceptanceCriterion(text: string): boolean {
+  const lowerText = text.toLowerCase();
+
+  // Filter out questions
+  if (text.includes('?')) return false;
+
+  // Filter out risk statements
+  if (lowerText.startsWith('fatal:') ||
+      lowerText.startsWith('high:') ||
+      lowerText.startsWith('medium:') ||
+      lowerText.startsWith('low:') ||
+      lowerText.includes('risk')) return false;
+
+  // Filter out "should we" type discussions
+  if (lowerText.startsWith('should we') ||
+      lowerText.startsWith('is the') ||
+      lowerText.startsWith('what')) return false;
+
+  // Filter out very short criteria (likely not meaningful)
+  if (text.length < 10) return false;
+
+  return true;
+}
+
 function buildAcceptanceCriteria(
   epic: NonNullable<ReturnType<Storage['getEpic']>>,
   _session: ReturnType<Storage['getSession']> & {}
 ): AcceptanceCriterion[] {
   const criteria: AcceptanceCriterion[] = [];
 
-  for (let i = 0; i < epic.extractedAcceptanceCriteria.length; i++) {
-    const criterion = epic.extractedAcceptanceCriteria[i];
+  // Filter to valid acceptance criteria only
+  const validCriteria = epic.extractedAcceptanceCriteria.filter(isValidAcceptanceCriterion);
+
+  // Limit to prevent token bloat
+  const limitedCriteria = validCriteria.slice(0, MAX_ACCEPTANCE_CRITERIA);
+
+  for (let i = 0; i < limitedCriteria.length; i++) {
+    const criterion = limitedCriteria[i];
     if (!criterion) continue;
+
+    // Truncate long criteria descriptions
+    const description = criterion.length > 200
+      ? criterion.slice(0, 197) + '...'
+      : criterion;
+
     criteria.push({
       id: `ac-${i + 1}`,
-      description: criterion,
+      description,
       given: 'The POC is implemented',
       when: 'The user interacts with the feature',
-      then: criterion,
+      then: 'Criterion is satisfied',  // Don't duplicate description
       priority: i === 0 ? 'must-have' : 'should-have',
       testable: true,
       automatable: true,
