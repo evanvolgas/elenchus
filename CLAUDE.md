@@ -2,15 +2,24 @@
 
 ## Project Overview
 
-Elenchus is an MCP server that transforms high-level epics into working proof-of-concepts through **interrogative specification** and **checkpoint-based execution**.
+Elenchus is an MCP server that implements **true Socratic elenchus** for software specification through premise tracking, contradiction detection, and forced resolution.
 
-Named after the Greek term for the Socratic method (ἔλεγχος), it emphasizes question-driven refinement over prescriptive specification.
+Named after the Greek term for the Socratic method (ἔλεγχος), it exposes contradictions in requirements through systematic questioning.
 
 ## Architecture
 
 See `ARCHITECTURE.md` for detailed system design.
 
-**Core Flow**: Epic → Analyze → Interrogate → Spec → Checkpoints → Execute → Deliver
+**Core Flow**: Epic → `elenchus_start` → Q&A with premises → `elenchus_qa` → Contradiction resolution → `elenchus_spec`
+
+## MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `elenchus_start` | Begin interrogation, detect signals (claims, gaps, tensions, assumptions) |
+| `elenchus_qa` | Submit Q&A with premises, detect contradictions, track aporia |
+| `elenchus_spec` | Generate spec when quality gates pass (no unresolved contradictions) |
+| `elenchus_health` | Health check |
 
 ## Tech Stack
 
@@ -35,12 +44,11 @@ npm run typecheck    # Check types
 
 ### File Organization
 
-- `/src/engines/` - Core business logic (one file per engine)
-- `/src/tools/` - MCP tool implementations
-- `/src/resources/` - MCP resource implementations
+- `/src/tools/` - MCP tool implementations (start.ts, qa.ts, spec.ts, health.ts)
 - `/src/storage/` - Database and persistence
 - `/src/types/` - TypeScript interfaces and types
 - `/src/utils/` - Shared utilities
+- `/src/prompts/` - Prompt templates for calling LLM
 
 ### Naming Conventions
 
@@ -56,7 +64,15 @@ npm run typecheck    # Check types
 - Zod schemas for all external inputs
 - No `any` types - use `unknown` with type guards
 - Prefer `interface` over `type` for object shapes
-- Use `readonly` arrays/objects where mutation isn't needed
+
+### Key Design Principle
+
+**Claude is the intelligence. Elenchus provides structure.**
+
+- No regex for content understanding
+- No keyword matching for semantics
+- The calling LLM does all reasoning
+- Elenchus tracks state and enforces gates
 
 ### Error Handling
 
@@ -68,44 +84,12 @@ npm run typecheck    # Check types
 ### Testing
 
 - Co-locate tests with source files (`*.test.ts`)
-- Test file naming: `{module}.test.ts`
 - Use descriptive test names: `it('should X when Y')`
 - Mock external dependencies (APIs, filesystem)
-- Aim for >80% coverage on critical paths
-
-## MCP Tool Guidelines
-
-Each MCP tool should:
-1. Validate all inputs with Zod
-2. Return structured responses (not strings)
-3. Handle errors gracefully with useful messages
-4. Log operations for debugging
-5. Be idempotent where possible
-
-## Checkpoints
-
-When implementing checkpoint logic:
-1. Always persist state before checkpoint
-2. Support resumption after restart
-3. Include artifact summaries for review
-4. Provide clear approve/reject/modify options
-5. Log all checkpoint decisions
 
 ## DO NOT
 
 - Commit API keys or secrets
-- Add new dependencies without discussing tradeoffs
+- Add regex/keyword matching for semantic understanding
 - Skip type validation on external inputs
-- Create circular dependencies between engines
-- Use synchronous file I/O in hot paths
-
-## Currently Working On
-
-Building the MVP pipeline:
-1. Epic ingestion
-2. Codebase analysis
-3. Interrogation engine
-4. Spec generation
-5. Checkpoint management
-6. Agent orchestration
-7. POC delivery
+- Have Elenchus call LLMs directly (the calling LLM does that)
