@@ -1,15 +1,11 @@
 /**
  * Dependency injection container for Elenchus services.
  *
- * Provides:
- * - Centralized service configuration
- * - Lazy initialization
- * - Easy mocking for tests
- * - Clean separation of concerns
+ * V3 Architecture: Elenchus is pure infrastructure.
+ * The calling LLM IS Socrates - we just provide storage.
  */
 
 import type { Storage } from '../storage/index.js';
-import type { LLMClient } from '../engines/llm-client.js';
 import type { logger as Logger } from '../utils/logger.js';
 
 type LoggerType = typeof Logger;
@@ -20,20 +16,17 @@ type LoggerType = typeof Logger;
 export interface ServiceConfig {
   /** Database path for storage */
   dbPath?: string;
-  /** Anthropic API key for LLM client */
-  anthropicApiKey?: string;
-  /** Enable MCP fallback for LLM */
-  mcpFallback?: boolean;
   /** Log level */
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
 }
 
 /**
  * Service container interface for dependency injection
+ *
+ * V3: No more LLM client - the calling LLM provides all intelligence.
  */
 export interface Services {
   storage: Storage;
-  llmClient: LLMClient;
   logger: LoggerType;
 }
 
@@ -42,7 +35,6 @@ export interface Services {
  */
 export interface ServiceFactories {
   createStorage: (config: ServiceConfig) => Storage;
-  createLLMClient: (config: ServiceConfig) => LLMClient;
   getLogger: () => LoggerType;
 }
 
@@ -56,24 +48,13 @@ let defaultFactories: ServiceFactories | null = null;
  */
 async function getDefaultFactories(): Promise<ServiceFactories> {
   if (!defaultFactories) {
-    const [{ Storage }, { createClient }, { logger }] = await Promise.all([
+    const [{ Storage }, { logger }] = await Promise.all([
       import('../storage/index.js'),
-      import('../engines/llm-client.js'),
       import('../utils/logger.js'),
     ]);
 
     defaultFactories = {
       createStorage: (config) => new Storage(config.dbPath),
-      createLLMClient: (config) => {
-        const clientConfig: { anthropicApiKey?: string; mcpFallback?: boolean } = {};
-        if (config.anthropicApiKey !== undefined) {
-          clientConfig.anthropicApiKey = config.anthropicApiKey;
-        }
-        if (config.mcpFallback !== undefined) {
-          clientConfig.mcpFallback = config.mcpFallback;
-        }
-        return createClient(clientConfig);
-      },
       getLogger: () => logger,
     };
   }
@@ -117,18 +98,6 @@ export class ServiceContainer {
   }
 
   /**
-   * Get or create the LLM client
-   */
-  async getLLMClient(): Promise<LLMClient> {
-    if (!this.services.llmClient) {
-      const factories = await this.getFactories();
-      const llmClient = factories.createLLMClient(this.config);
-      this.services = { ...this.services, llmClient };
-    }
-    return this.services.llmClient as LLMClient;
-  }
-
-  /**
    * Get the logger
    */
   async getLogger(): Promise<LoggerType> {
@@ -144,12 +113,11 @@ export class ServiceContainer {
    * Get all services (for tool handlers)
    */
   async getAll(): Promise<Services> {
-    const [storage, llmClient, logger] = await Promise.all([
+    const [storage, logger] = await Promise.all([
       this.getStorage(),
-      this.getLLMClient(),
       this.getLogger(),
     ]);
-    return { storage, llmClient, logger };
+    return { storage, logger };
   }
 
   /**

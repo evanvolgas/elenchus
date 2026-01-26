@@ -1,11 +1,23 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Storage } from '../storage/index.js';
-import { GenerateSpecInputSchema } from '../types/index.js';
-import { organizeAnswers, type OrganizedAnswers, type AnswerWithContext } from '../engines/answer-extractor.js';
 import { generateId } from '../utils/id.js';
+import { COVERAGE_AREAS, REQUIRED_COVERAGE, type CoverageArea } from './interrogate.js';
 
 /**
- * Output from spec generation - structured data for LLM synthesis
+ * Organized Q&A by coverage area
+ */
+interface OrganizedQA {
+  question: string;
+  answer: string;
+  priority: string;
+  answeredAt?: string | undefined;
+}
+
+/**
+ * Output from spec generation - organized data for LLM synthesis
+ *
+ * This is NOT a generated specification. It's the organized interrogation data
+ * that the calling LLM will synthesize into a spec.
  */
 export interface SpecGenerationOutput {
   /** Unique spec ID for reference */
@@ -16,14 +28,15 @@ export interface SpecGenerationOutput {
     id: string;
     title?: string;
     description: string;
+    rawContent: string;
     source: string;
   };
 
-  /** Organized answers from interrogation - the raw material */
-  answers: OrganizedAnswers;
+  /** Organized Q&A by coverage area */
+  answers: Record<CoverageArea, OrganizedQA[]>;
 
   /** Codebase context if available */
-  codebaseContext: {
+  codebaseContext?: {
     maturity: string;
     architecture: string;
     languages: string[];
@@ -34,69 +47,60 @@ export interface SpecGenerationOutput {
 
   /** Session metrics */
   session: {
+    id: string;
     rounds: number;
     questionsAsked: number;
     questionsAnswered: number;
     clarityScore: number;
-    completenessScore: number;
   };
 
   /**
-   * INSTRUCTIONS FOR THE CALLING LLM:
-   *
-   * You have all the raw interrogation data above. YOUR job is to synthesize
-   * this into a coherent specification. Elenchus organized the data - you do
-   * the thinking.
-   *
-   * Use the answers to determine:
-   * 1. Problem statement (from scope answers)
-   * 2. Target users (from stakeholder answers)
-   * 3. Success criteria (from success answers)
-   * 4. Technical approach (from technical answers)
-   * 5. Constraints (from constraint answers)
-   * 6. Risks (from risk answers)
-   * 7. Timeline (from timeline answers)
-   *
-   * Then synthesize an execution plan with:
-   * - Concrete phases based on what was discussed
-   * - Specific tasks derived from the requirements
-   * - Realistic estimates based on the scope described
-   * - Integration points mentioned in the answers
-   * - Data models implied by the domain
-   *
-   * DO NOT use generic templates. Every part of the spec should trace back
-   * to something in the interrogation answers.
+   * Synthesis instructions for the calling LLM
    */
   instructions: string;
 }
 
 /**
- * Tool definition for spec generation
+ * Tool definition for spec generation - THE GATE ENFORCER
+ *
+ * This tool BLOCKS spec generation until coverage requirements are met.
+ * When it does proceed, it returns organized data for the calling LLM to synthesize.
  */
 export const generateSpecTool: Tool = {
   name: 'elenchus_generate_spec',
-  description: `Prepare interrogation data for specification synthesis.
+  description: `Get organized interrogation data for specification synthesis.
 
-**IMPORTANT**: This tool does NOT generate the specification. It organizes
-the interrogation answers and returns them to YOU (the calling LLM) to
-synthesize into a coherent spec.
+**THIS IS A GATE.** You can only call this when:
+- Clarity score >= 80%
+- All required coverage areas have answers (scope, success, constraint, risk)
 
-Returns:
-- The original epic
-- All interrogation answers organized by type (scope, technical, success, etc.)
-- Codebase context if available
-- Session metrics
+If requirements aren't met, this tool will REJECT your request and tell you what's missing.
 
-YOUR job after calling this tool:
-1. Read through all the answers
-2. Synthesize them into a coherent problem statement
-3. Extract concrete technical decisions from the technical answers
-4. Derive success criteria from success answers
-5. Identify risks from risk answers
-6. Build an execution plan based on what was actually discussed
-7. Estimate based on the actual scope, not generic formulas
+## WHAT YOU GET
 
-The spec should be grounded in what the user said, not template boilerplate.`,
+When requirements are met, you receive:
+1. The original epic
+2. All Q&A organized by category
+3. Codebase context (if analyzed)
+4. Session metrics
+
+## WHAT YOU DO
+
+Synthesize the Q&A into a specification that includes:
+
+1. **Problem Statement** - From scope answers. What are we building and why?
+2. **Target Users** - From stakeholder answers. Who uses this?
+3. **Success Criteria** - From success answers. How do we know it's done?
+4. **Technical Approach** - From technical answers. What technologies/patterns?
+5. **Constraints** - From constraint answers. What limits exist?
+6. **Risks** - From risk answers. What could go wrong?
+7. **Execution Plan** - Specific tasks derived from the above, NOT generic phases
+
+## CRITICAL
+
+- Every section must cite actual Q&A. No generic boilerplate.
+- Tasks must be specific ("Implement JWT auth") not generic ("Add authentication")
+- If you can't cite a Q&A for something, you're making it up. Don't.`,
 
   inputSchema: {
     type: 'object',
@@ -116,25 +120,56 @@ The spec should be grounded in what the user said, not template boilerplate.`,
 };
 
 /**
- * Handle spec generation - returns organized data for LLM synthesis
+ * Handle spec generation - THE GATE
+ *
+ * Blocks if clarity < 80% or required coverage areas are missing.
  */
 export async function handleGenerateSpec(
   args: Record<string, unknown>,
   storage: Storage
 ): Promise<SpecGenerationOutput> {
-  const input = GenerateSpecInputSchema.parse(args);
+  const sessionId = args.sessionId as string;
+  const includeCodebaseContext = args.includeCodebaseContext !== false;
 
-  // Get session
-  const session = storage.getSession(input.sessionId);
-  if (!session) {
-    throw new Error(`Session not found: ${input.sessionId}`);
+  if (!sessionId) {
+    throw new Error('sessionId is required');
   }
 
-  // Check minimum readiness
+  // Get session
+  const session = storage.getSession(sessionId);
+  if (!session) {
+    throw new Error(`Session not found: ${sessionId}`);
+  }
+
+  // Check minimum answers
   if (session.answers.length === 0) {
     throw new Error(
-      `No answers in session. Use elenchus_interrogate to generate questions ` +
-      `and elenchus_answer to provide answers first.`
+      'BLOCKED: No answers in session. ' +
+      'Use elenchus_interrogate to get the epic, ask the user questions, ' +
+      'then elenchus_answer to submit their responses.'
+    );
+  }
+
+  // Calculate coverage
+  const coverage = calculateCoverage(session);
+
+  // Check required coverage areas
+  const missingRequired = REQUIRED_COVERAGE.filter(area => !coverage[area].covered);
+  if (missingRequired.length > 0) {
+    throw new Error(
+      `BLOCKED: Missing required coverage areas: ${missingRequired.join(', ')}. ` +
+      'Ask the user questions about these areas and submit via elenchus_answer.'
+    );
+  }
+
+  // Check clarity score
+  const coveredRequired = REQUIRED_COVERAGE.filter(area => coverage[area].covered).length;
+  const clarityScore = Math.round((coveredRequired / REQUIRED_COVERAGE.length) * 100);
+
+  if (clarityScore < 80) {
+    throw new Error(
+      `BLOCKED: Clarity score is ${clarityScore}% (need 80%+). ` +
+      'Continue interrogation to improve coverage.'
     );
   }
 
@@ -145,11 +180,11 @@ export async function handleGenerateSpec(
   }
 
   // Organize answers by type
-  const organized = organizeAnswers(session);
+  const organizedAnswers = organizeAnswers(session);
 
-  // Get codebase context if available and requested
+  // Get codebase context if available
   let codebaseContext: SpecGenerationOutput['codebaseContext'];
-  if (input.compact !== false) {
+  if (includeCodebaseContext) {
     const context = storage.getContextForPath('.');
     if (context) {
       codebaseContext = {
@@ -165,61 +200,8 @@ export async function handleGenerateSpec(
 
   const specId = generateId('spec');
 
-  const instructions = `
-You have the complete interrogation data for this epic. Synthesize it into a specification.
-
-## What you have:
-
-### Scope Answers (${organized.scope.length})
-${formatAnswers(organized.scope)}
-
-### Success Criteria Answers (${organized.success.length})
-${formatAnswers(organized.success)}
-
-### Technical Answers (${organized.technical.length})
-${formatAnswers(organized.technical)}
-
-### Constraint Answers (${organized.constraints.length})
-${formatAnswers(organized.constraints)}
-
-### Stakeholder Answers (${organized.stakeholder.length})
-${formatAnswers(organized.stakeholder)}
-
-### Risk Answers (${organized.risk.length})
-${formatAnswers(organized.risk)}
-
-### Timeline Answers (${organized.timeline.length})
-${formatAnswers(organized.timeline)}
-
-## Your task:
-
-Create a specification that includes:
-
-1. **Problem Statement**: Synthesize from scope answers. What are we actually building and why?
-
-2. **Target Users**: From stakeholder answers. Who uses this and what do they need?
-
-3. **Success Criteria**: From success answers. How do we know when it's done?
-
-4. **Technical Approach**: From technical answers. What technologies, patterns, integrations?
-
-5. **Data Model**: What entities are implied by the domain? (agents, teams, costs, etc.)
-
-6. **Execution Plan**: Concrete phases and tasks based on what was discussed.
-   - NOT generic "Research phase" / "Implementation phase"
-   - Specific tasks like "Implement Claude API integration" or "Build agent utilization dashboard"
-
-7. **Estimates**: Based on the actual scope described, not fixed formulas.
-   - Consider the number of integrations mentioned
-   - Consider the complexity of the data model
-   - Consider the user's timeline constraints
-
-8. **Risks**: From risk answers, plus any you identify from the technical approach.
-
-9. **Out of Scope**: What was explicitly excluded?
-
-Every section should cite or reference the actual answers. No generic boilerplate.
-`.trim();
+  // Build synthesis instructions
+  const instructions = buildInstructions(organizedAnswers, codebaseContext);
 
   return {
     specId,
@@ -227,31 +209,138 @@ Every section should cite or reference the actual answers. No generic boilerplat
       id: epic.id,
       title: epic.title,
       description: epic.description,
+      rawContent: epic.rawContent,
       source: epic.source,
     },
-    answers: organized,
+    answers: organizedAnswers,
     codebaseContext,
     session: {
+      id: session.id,
       rounds: session.round,
       questionsAsked: session.questions.length,
       questionsAnswered: session.answers.length,
-      clarityScore: session.clarityScore,
-      completenessScore: session.completenessScore,
+      clarityScore,
     },
     instructions,
   };
 }
 
 /**
- * Format answers for inclusion in instructions
+ * Calculate coverage by area
  */
-function formatAnswers(answers: AnswerWithContext[]): string {
-  if (answers.length === 0) {
-    return '(none provided)';
+function calculateCoverage(session: { questions: Array<{ id: string; type: string }>; answers: Array<{ questionId: string }> }): Record<CoverageArea, { covered: boolean }> {
+  const coverage: Record<CoverageArea, { covered: boolean }> = {} as any;
+
+  for (const area of COVERAGE_AREAS) {
+    const questionsInArea = session.questions.filter(q => q.type === area);
+    const answeredInArea = questionsInArea.filter(q =>
+      session.answers.some(a => a.questionId === q.id)
+    );
+
+    coverage[area] = {
+      covered: answeredInArea.length > 0,
+    };
   }
 
-  return answers.map(a => `
-Q: ${a.question}
-A: ${a.answer}
-`).join('\n');
+  return coverage;
+}
+
+/**
+ * Organize answers by coverage area
+ */
+function organizeAnswers(session: {
+  questions: Array<{ id: string; type: string; question: string; priority: string }>;
+  answers: Array<{ questionId: string; answer: string; answeredAt?: string }>;
+}): Record<CoverageArea, OrganizedQA[]> {
+  const organized: Record<CoverageArea, OrganizedQA[]> = {} as any;
+
+  for (const area of COVERAGE_AREAS) {
+    organized[area] = [];
+  }
+
+  for (const answer of session.answers) {
+    const question = session.questions.find(q => q.id === answer.questionId);
+    if (!question) continue;
+
+    const area = question.type as CoverageArea;
+    if (!COVERAGE_AREAS.includes(area)) continue;
+
+    organized[area].push({
+      question: question.question,
+      answer: answer.answer,
+      priority: question.priority,
+      answeredAt: answer.answeredAt,
+    });
+  }
+
+  return organized;
+}
+
+/**
+ * Build synthesis instructions for the calling LLM
+ */
+function buildInstructions(
+  answers: Record<CoverageArea, OrganizedQA[]>,
+  codebaseContext?: SpecGenerationOutput['codebaseContext']
+): string {
+  const sections: string[] = [];
+
+  sections.push('# Specification Synthesis Instructions');
+  sections.push('');
+  sections.push('You have the complete interrogation data. Synthesize it into a specification.');
+  sections.push('');
+
+  // Show what we have
+  sections.push('## Available Data');
+  sections.push('');
+
+  for (const area of COVERAGE_AREAS) {
+    const areaAnswers = answers[area];
+    sections.push(`### ${area.charAt(0).toUpperCase() + area.slice(1)} (${areaAnswers.length} answers)`);
+    if (areaAnswers.length === 0) {
+      sections.push('(none provided)');
+    } else {
+      for (const qa of areaAnswers) {
+        sections.push(`**Q:** ${qa.question}`);
+        sections.push(`**A:** ${qa.answer}`);
+        sections.push('');
+      }
+    }
+    sections.push('');
+  }
+
+  if (codebaseContext) {
+    sections.push('### Codebase Context');
+    sections.push(`- Maturity: ${codebaseContext.maturity}`);
+    sections.push(`- Architecture: ${codebaseContext.architecture}`);
+    sections.push(`- Languages: ${codebaseContext.languages.join(', ')}`);
+    sections.push(`- Has Tests: ${codebaseContext.hasTests}`);
+    sections.push(`- Has TypeScript: ${codebaseContext.hasTypeScript}`);
+    if (codebaseContext.relevantFiles.length > 0) {
+      sections.push(`- Relevant Files: ${codebaseContext.relevantFiles.join(', ')}`);
+    }
+    sections.push('');
+  }
+
+  // Synthesis requirements
+  sections.push('## Your Task');
+  sections.push('');
+  sections.push('Create a specification with these sections:');
+  sections.push('');
+  sections.push('1. **Problem Statement** - Synthesize from scope answers');
+  sections.push('2. **Target Users** - From stakeholder answers (or infer from scope)');
+  sections.push('3. **Success Criteria** - From success answers. Must be measurable.');
+  sections.push('4. **Technical Approach** - From technical answers. Specific technologies.');
+  sections.push('5. **Constraints** - From constraint answers. Timeline, budget, tech limits.');
+  sections.push('6. **Risks** - From risk answers. What could go wrong and mitigation.');
+  sections.push('7. **Execution Plan** - Specific tasks derived from the Q&A above.');
+  sections.push('');
+  sections.push('## Critical Requirements');
+  sections.push('');
+  sections.push('- **Every claim must cite Q&A.** No making things up.');
+  sections.push('- **Tasks must be specific.** "Implement JWT auth with 24h expiry" not "Add auth"');
+  sections.push('- **No generic boilerplate.** If it doesn\'t trace to Q&A, remove it.');
+  sections.push('- **Match the codebase.** If TypeScript exists, spec TypeScript.');
+
+  return sections.join('\n');
 }

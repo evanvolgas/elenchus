@@ -1,76 +1,33 @@
 # Elenchus
 
-<p align="center">
-  <img src="elenchus.png" alt="Elenchus - The Spec Factory" width="600">
-</p>
-
-<p align="center">
-  <strong>Transform epics into agent-ready specifications through Socratic interrogation</strong>
-</p>
+An MCP server that transforms vague human intent into executable agent prompts through Socratic questioning.
 
 > **Elenchus** (ἔλεγχος): The Socratic method of eliciting truth by question and answer.
 
-Transform high-level epics into precise, agent-ready specifications through **interrogative specification**. Elenchus is a **specification engine**, not an execution engine—it prepares the plan, external orchestrators (like Claude Flow) execute it.
+## What It Does
 
-## The Problem
+Elenchus sits between human intent and agent execution. You give it a vague epic like "build user authentication" and it:
 
-79-87% of AI coding agent failures are specification problems, not technical ones. Agents fail because they're given vague requirements and expected to read minds.
+1. **Interrogates** - Asks targeted questions to surface scope, constraints, success criteria, and risks
+2. **Tracks coverage** - Ensures all critical areas are addressed before proceeding
+3. **Compiles** - Transforms Q&A into executable agent prompts with codebase context
 
-Current approaches fail because:
-- **Over-specification** defeats agent creativity and becomes outdated immediately
-- **Under-specification** leads to constant clarification loops and wasted cycles
-- **Static specs** diverge from dynamic codebases
+The output isn't a document for humans to read. It's a structured prompt that agents execute directly.
 
-## The Solution
+## What It Doesn't Do
 
-Elenchus uses a **hybrid approach**:
-
-1. **Thin spec upfront**: Capture intent and constraints, not implementation details
-2. **Socratic interrogation**: Generate targeted clarifying questions to surface ambiguity
-3. **Checkpoint validation**: Human-in-the-loop approval at critical decision points
-4. **Context-aware generation**: Analyze your codebase to generate specs that fit
+- **Execute code** - Elenchus generates prompts, not code. Pass the output to Claude Flow, Task tool, or another orchestrator.
+- **Replace thinking** - The calling LLM (Claude, GPT, etc.) provides the intelligence. Elenchus provides structure and state management.
+- **Generate specs for humans** - The output is designed for agent consumption, not human review.
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/evanvolgas/elenchus.git
 cd elenchus
-
-# Install dependencies
 npm install
-
-# Build
 npm run build
 ```
-
-## Setup
-
-### No API Key Required (MCP Usage)
-
-**When using Elenchus via MCP (Claude Code, Cursor, etc.), no API key is needed.** The calling LLM (Claude, GPT, etc.) provides all the intelligence—Elenchus provides structure, workflow, and templates.
-
-Elenchus uses:
-- **Template-based question generation** that covers all essential specification areas
-- **Structured workflows** that guide the interrogation process
-- **Technical decision extraction** that captures frameworks, APIs, databases, and algorithms from your answers
-
-The calling agent IS the LLM. Elenchus orchestrates, the caller thinks.
-
-### Optional: API Key for Standalone/CLI Usage
-
-If you're using Elenchus standalone (without a calling LLM), you can configure an Anthropic API key for internal LLM processing:
-
-```bash
-# Environment variable
-export ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
-
-# Or config file
-cp elenchus.config.example.json elenchus.config.json
-# Edit elenchus.config.json to add your key
-```
-
-> **Note**: This is only needed for standalone/CLI usage. MCP users should skip this.
 
 ### Claude Code
 
@@ -93,379 +50,166 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### Verify Installation
-
-Restart your editor and check that Elenchus tools are available. In Claude Code, you can ask:
-
-> "What Elenchus tools are available?"
-
 ## Quick Start
 
 ### 1. Ingest an Epic
 
 ```
-Use elenchus_ingest to process this epic:
+Use elenchus_ingest with this content:
 
-"Build a REST API for managing a book library. Users should be able to:
-- Add, update, and delete books
-- Search books by title, author, or ISBN
-- Track which books are checked out and by whom
-
-Technical requirements:
-- Use Express and TypeScript
-- Store data in SQLite
-- Include authentication for librarians"
+"Build a REST API for a book library. Users can search books,
+check them out, and return them. Librarians can add/remove books."
 ```
 
-### 2. Analyze Your Codebase (Optional)
+### 2. Start Interrogation
 
 ```
-Use elenchus_analyze to understand my codebase at /path/to/project
+Use elenchus_interrogate with the epic ID
 ```
 
-This detects:
-- Codebase maturity (greenfield, early, established, legacy)
-- Architecture patterns (monolith, microservices, serverless)
-- Existing conventions (naming, file structure, testing)
-- Relevant files for your epic
+The tool returns the epic and current coverage state. The calling LLM reads the epic and asks the user clarifying questions.
 
-### 3. Start Interrogation
+### 3. Submit Answers
 
 ```
-Use elenchus_interrogate to generate clarifying questions for my epic
+Use elenchus_answer with the session ID and answers:
+
+- type: scope, question: "What types of users?", answer: "Patrons and librarians"
+- type: success, question: "How measure success?", answer: "Books can be searched in <200ms"
+- type: constraint, question: "Tech stack?", answer: "Express, TypeScript, SQLite"
+- type: risk, question: "What could fail?", answer: "Concurrent checkout conflicts"
 ```
 
-Elenchus generates prioritized questions like:
-- **Critical**: "What are the acceptance criteria for the search feature?"
-- **Important**: "Should authentication use JWT or sessions?"
-- **Nice-to-have**: "What's the expected timeline for this POC?"
+Repeat until clarity score reaches 80%+.
 
-### 4. Answer Questions
+### 4. Generate Spec Data
 
 ```
-Use elenchus_answer to respond:
-- Question about search: "Users should be able to search by partial title match, exact author name, or ISBN. Results should return within 200ms."
-- Question about auth: "Use JWT with 24-hour expiration"
+Use elenchus_generate_spec with the session ID
 ```
 
-Repeat until clarity score reaches 70%+.
+Returns organized Q&A for the calling LLM to synthesize into a specification.
 
-### 5. Generate Specification
-
-```
-Use elenchus_generate_spec to create the agent-ready specification
-```
-
-Outputs in your choice of format (default: markdown for token efficiency):
-- **Markdown**: Human-readable for review (default)
-- **YAML**: Machine-readable for agent consumption
-- **JSON**: Structured task graph for orchestration
-
-Use `format: 'all'` to get all formats, or `includeRawSpec: true` for the full spec object.
-
-### 6. Validate Specification
+### 5. Compile to Agent Prompts
 
 ```
-Use elenchus_validate to check the spec is complete and ready for execution
+Use elenchus_compile with the session ID
 ```
 
-The generated specification is now ready to hand off to an execution orchestrator.
-
-## Executing Specifications
-
-**Elenchus generates the plan, but doesn't execute it.** Once you have a validated specification, hand it off to an execution orchestrator.
-
-### Recommended: Claude Flow
-
-Claude Flow is the recommended orchestrator for executing Elenchus specifications. It provides:
-
-- Multi-agent swarm coordination
-- Checkpoint-based execution with human approval gates
-- Background worker system for continuous optimization
-- Memory persistence across sessions
-
-**Installation**:
-
-```bash
-# Add Claude Flow MCP server
-claude mcp add claude-flow -- npx -y @claude-flow/cli@latest
-
-# Verify installation
-npx @claude-flow/cli@latest doctor
-```
-
-**Basic usage after spec generation**:
-
-```bash
-# Initialize swarm with anti-drift topology
-npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8
-
-# Spawn agents based on spec phases
-# (Or use Claude Code Task tool to spawn agents concurrently)
-```
-
-Learn more: [Claude Flow on GitHub](https://github.com/ruvnet/claude-flow)
-
-### Alternative: Claude Code Task Tool
-
-You can also use Claude Code's built-in Task tool to spawn agents directly based on the generated specification.
-
-## MCP Tools Reference
-
-| Tool | Description |
-|------|-------------|
-| `elenchus_ingest` | Parse epics from text, JIRA, Notion, GitHub, or Linear |
-| `elenchus_analyze` | Analyze codebase context, patterns, and conventions |
-| `elenchus_interrogate` | Generate Socratic clarifying questions |
-| `elenchus_answer` | Process answers and update session |
-| `elenchus_generate_spec` | Create agent-ready specification (handoff point) |
-| `elenchus_validate` | Validate spec completeness and readiness |
-| `elenchus_status` | Check status of epics, sessions, or specs |
-| `elenchus_health` | Server health check with storage connectivity and metrics |
-
-## Workflow Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     ELENCHUS (Specification)                    │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐          │
-│  │   INGEST    │──▶│   ANALYZE   │──▶│ INTERROGATE │          │
-│  │   Epic      │   │  Codebase   │   │  Questions  │          │
-│  └─────────────┘   └─────────────┘   └──────┬──────┘          │
-│                                              │                  │
-│                   ┌──────────────────────────┘                  │
-│                   │                                             │
-│                   ▼                                             │
-│           ┌─────────────┐   ┌─────────────┐   ┌─────────────┐ │
-│           │   ANSWER    │──▶│  GENERATE   │──▶│  VALIDATE   │ │
-│           │  Questions  │   │    Spec     │   │    Spec     │ │
-│           └─────────────┘   └─────────────┘   └──────┬──────┘ │
-│                                                       │         │
-└───────────────────────────────────────────────────────┼─────────┘
-                                                        │
-                                      Handoff: Agent-Ready Spec
-                                                        │
-┌───────────────────────────────────────────────────────┼─────────┐
-│              EXTERNAL ORCHESTRATOR (Execution)        │         │
-│                    (Claude Flow recommended)          │         │
-├───────────────────────────────────────────────────────┼─────────┤
-│                                                       ▼         │
-│                                              ┌─────────────┐    │
-│                                              │   EXECUTE   │    │
-│                                              │    Swarm    │    │
-│                                              └──────┬──────┘    │
-│                                                     │           │
-│                                                     ▼           │
-│                                              ┌─────────────┐    │
-│                                              │   DELIVER   │    │
-│                                              │    POC      │    │
-│                                              └─────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Example Session
-
-```typescript
-// 1. Ingest epic
-const epic = await elenchus_ingest({
-  source: 'text',
-  content: 'Build a todo app with user authentication...'
-});
-// Returns: { epic: { id: 'epic-abc123', ... }, extractionConfidence: 75 }
-
-// 2. Analyze codebase
-const context = await elenchus_analyze({
-  path: '.',
-  epicId: epic.epic.id
-});
-// Returns: { maturity: 'established', architecture: 'monolith', ... }
-
-// 3. Start interrogation
-const session = await elenchus_interrogate({
-  epicId: epic.epic.id
-});
-// Returns: { session: {...}, nextQuestions: [...], readyForSpec: false }
-
-// 4. Answer questions
-await elenchus_answer({
-  sessionId: session.session.id,
-  questionId: 'q-scope-goals-1',
-  answer: 'Users should be able to create, complete, and delete todos'
-});
-
-// 5. Generate spec when ready
-const spec = await elenchus_generate_spec({
-  sessionId: session.session.id
-});
-// Returns: { summary: {...}, markdown: '...' }
-// Use format: 'all' and includeRawSpec: true for full output
-```
-
-## Specification Output
-
-Generated specs include:
-
-### Business Context
+Returns executable agent prompts with:
 - Problem statement
-- User persona
-- Success metrics
-- Out of scope items
+- Technical decisions
+- Agent prompts (research, design, implementation, test, review)
+- Success criteria
+- Execution plan with phases
+- Checkpoints for human review
 
-### Technical Context
-- Codebase analysis results
-- Constraints and requirements
-- Integration points
+### 6. Execute
 
-### Execution Plan
-- Phased approach (Research → Architecture → Implementation → Testing → Review)
-- Task breakdown with agent assignments
-- Checkpoint gates for human approval
+Pass the compiled prompts to an orchestrator (Claude Flow, Task tool) for execution.
 
-### Validation
-- Acceptance criteria (Given/When/Then format)
-- Test strategy
-- Risk assessment
+## MCP Tools
 
-### Estimates
-- Token usage estimates
-- Cost estimates (by phase)
-- Duration estimates
+| Tool | Purpose |
+|------|---------|
+| `elenchus_ingest` | Parse epic from text, JIRA, GitHub, Notion, or Linear |
+| `elenchus_analyze` | Analyze codebase patterns, conventions, and relevant files |
+| `elenchus_interrogate` | Start/continue Socratic questioning session |
+| `elenchus_answer` | Submit answers with coverage area categorization |
+| `elenchus_generate_spec` | Gate on coverage, organize Q&A for synthesis |
+| `elenchus_compile` | Generate executable agent prompts from Q&A |
+| `elenchus_validate` | Validate spec completeness |
+| `elenchus_checkpoint` | Record checkpoint decisions during execution |
+| `elenchus_delivery` | Record what was delivered after execution |
+| `elenchus_status` | Get status of epics, sessions, or specs |
+| `elenchus_health` | Server health check |
 
-## Interrogation Engine Features
+## How Interrogation Works
 
-### Template-Based Question Generation (No API Key Required)
-- **Comprehensive coverage**: Questions across scope, constraints, success criteria, technical decisions, and risks
-- **Tech stack awareness**: Detects frameworks, databases, and patterns from your answers
-- **Domain adaptation**: Question templates adapt to the type of project (API, frontend, data pipeline, etc.)
+The calling LLM is the intelligence. Elenchus provides:
 
-### Technical Decision Extraction
-Elenchus extracts concrete technical details from your answers:
-- **API endpoints**: `GET /users`, `POST /auth/login`, etc.
-- **Data models**: Tables, fields, relationships
-- **Frameworks & languages**: Express, React, PostgreSQL, etc.
-- **Algorithms**: Search strategies, sorting, caching approaches
-- **Architecture patterns**: Microservices, monolith, serverless
+1. **Coverage areas** - scope, success, constraint, risk, stakeholder, technical
+2. **Tracking** - What's been asked, what's been answered
+3. **Gating** - Blocks spec generation until required areas are covered
 
-### Multi-Round Progression
-- **Adaptive questioning**: Follow-up questions based on previous answers
-- **80% clarity escape**: Can proceed to spec generation when understanding is sufficient
-- **10-round maximum**: Prevents infinite loops
+The tool descriptions contain the Socratic methodology. When you call `elenchus_interrogate`, you get back:
+- The epic content
+- Current coverage percentages
+- Previous Q&A for context
+- What's missing
 
-### Challenge Mode (Opt-in)
-Enable with `challengeMode: true` in interrogation:
-- **Devil's advocate questions**: "What if this fails at 10x scale?"
-- **Assumption surfacing**: "Are you assuming all users have accounts?"
-- **Alternative exploration**: "Have you considered GraphQL instead of REST?"
+The calling LLM reads this and formulates questions. The user answers. The LLM calls `elenchus_answer` with categorized answers. Repeat until ready.
 
-## Question Types
+## Executable Prompt Format
 
-Elenchus generates questions in six categories:
+The `elenchus_compile` output includes prompts for each agent phase:
 
-| Type | Purpose | Example |
-|------|---------|---------|
-| **Scope** | Define boundaries | "What is explicitly OUT of scope?" |
-| **Constraint** | Surface requirements | "Are there performance requirements?" |
-| **Success** | Define done | "How will we validate this works?" |
-| **Technical** | Guide decisions | "Should we use REST or GraphQL?" |
-| **Risk** | Identify concerns | "What could go wrong?" |
-| **Clarification** | Remove ambiguity | "When you say 'users', do you mean...?" |
-
-## Codebase Maturity Detection
-
-Elenchus adapts to your codebase:
-
-| Maturity | Signals | Approach |
-|----------|---------|----------|
-| **Greenfield** | No files | Maximum flexibility, establish conventions |
-| **Early** | Few files, no tests | Suggest patterns, add testing |
-| **Established** | Tests, CI, TypeScript | Follow existing conventions |
-| **Legacy** | Large, mixed patterns | Careful integration, risk assessment |
-
-## Architecture
-
+```json
+{
+  "problemStatement": "Build a book library API with search and checkout",
+  "technicalDecisions": [
+    { "decision": "Use Express + TypeScript", "rationale": "User requirement" }
+  ],
+  "agentPrompts": {
+    "research": "Analyze existing code patterns in /src/...",
+    "design": "Design REST endpoints for /books, /checkouts...",
+    "implementation": "Implement BookService with checkout logic...",
+    "test": "Test concurrent checkout conflicts...",
+    "review": "Verify error handling follows Result<T,E> pattern..."
+  },
+  "successCriteria": ["Search returns in <200ms", "Checkout prevents conflicts"],
+  "executionPlan": [
+    { "phase": "Research", "agent": "researcher", "estimatedEffort": "S" },
+    { "phase": "Design", "agent": "architect", "estimatedEffort": "M" }
+  ],
+  "checkpoints": [
+    { "after": "Design", "reviewCriteria": "API contract review" }
+  ]
+}
 ```
-elenchus/
-├── src/
-│   ├── index.ts           # Entry point
-│   ├── server.ts          # MCP server
-│   ├── tools/             # MCP tool implementations
-│   │   ├── ingest.ts
-│   │   ├── analyze.ts
-│   │   ├── interrogate.ts
-│   │   ├── answer.ts
-│   │   ├── generate-spec.ts
-│   │   ├── validate.ts
-│   │   ├── status.ts
-│   │   └── health.ts
-│   ├── resources/         # MCP resources
-│   ├── storage/           # SQLite persistence
-│   ├── types/             # TypeScript definitions
-│   └── utils/             # Helpers
-├── tests/                 # Test files
-├── dist/                  # Compiled output
-└── package.json
-```
+
+## Codebase Analysis
+
+When you call `elenchus_analyze`, it detects:
+
+- **Maturity**: greenfield, early, established, legacy
+- **Architecture**: monolith, microservices, serverless
+- **Conventions**: error handling, validation, testing patterns
+- **Relevant files**: What files relate to the epic
+
+This context gets included in compiled prompts so agents follow your existing patterns.
+
+## Feedback Loops
+
+Elenchus stores execution records and can learn patterns:
+
+- `ExecutionRecord` - What prompts led to success/failure
+- `PromptInsight` - Patterns like "explicit file paths → 85% success rate"
+
+These insights feed back into future compilations. No ML—just correlation tracking.
 
 ## Development
 
 ```bash
-# Run in development mode
-npm run dev
-
-# Type check
-npm run typecheck
-
-# Build
-npm run build
-
-# Run tests
-npm test
-
-# Lint
-npm run lint
+npm run dev       # Run with watch mode
+npm run build     # Compile TypeScript
+npm run test      # Run tests
+npm run typecheck # Type check
+npm run lint      # Lint
 ```
 
-## Roadmap
+## Architecture
 
-### MVP (Current)
-- [x] Epic ingestion (text)
-- [x] Codebase analysis
-- [x] Socratic interrogation
-- [x] Spec generation (YAML/Markdown/JSON)
-- [x] Validation
-
-### Next
-- [ ] Checkpoint feedback loop (record execution results)
-- [ ] JIRA/Notion/GitHub integrations for epic ingestion
-- [ ] Multi-epic session support
-- [ ] Spec refinement based on execution feedback
-
-### Future
-- [ ] Multi-user collaborative sessions
-- [ ] Cost tracking and optimization recommendations
-- [ ] Spec versioning and diff
-- [ ] Learning from execution outcomes to improve future interrogations
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design.
 
 ## Philosophy
 
-1. **Interrogation over Specification**: Ask questions, don't assume answers
-2. **Separation of Concerns**: Specification (Elenchus) and execution (external orchestrators) are distinct
-3. **Adaptation over Prescription**: Detect codebase context, don't force patterns
-4. **Transparency over Magic**: Show reasoning, decisions, and tradeoffs
-5. **Checkpoints over Autonomy**: Humans approve at critical gates (during execution)
-
-## Why "Elenchus"?
-
-In ancient Greek philosophy, *elenchus* (ἔλεγχος) refers to the Socratic method of inquiry—a form of cooperative argumentative dialogue that uses questioning to stimulate critical thinking and illuminate ideas.
-
-Just as Socrates used questions to help others discover truth, Elenchus uses targeted interrogation to transform vague epics into precise, executable specifications.
+1. **Claude is the intelligence** - Elenchus provides state and prompts, not reasoning
+2. **Interrogation over speculation** - Ask questions, don't assume answers
+3. **Executable output** - Prompts for agents, not documents for humans
+4. **Gated progression** - Block advancement until requirements are met
+5. **Feedback loops** - Learn from outcomes without complex ML
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions welcome! Please read the architecture documentation in `ARCHITECTURE.md` before submitting PRs.

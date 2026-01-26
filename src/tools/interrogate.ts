@@ -2,43 +2,124 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Storage } from '../storage/index.js';
 import {
   type InterrogationSession,
-  type Question,
   InterrogateInputSchema,
 } from '../types/index.js';
 import { generateId } from '../utils/id.js';
-import { logger } from '../utils/logger.js';
-import {
-  runInterrogationV2,
-  type SocraticGuidance,
-  type InterrogationSignals,
-} from '../engines/index.js';
 
 /**
- * Tool definition for interrogation
+ * Coverage areas that Elenchus tracks.
+ * The calling LLM must provide questions and answers in these categories.
+ */
+export const COVERAGE_AREAS = [
+  'scope',
+  'success',
+  'constraint',
+  'risk',
+  'stakeholder',
+  'technical',
+] as const;
+
+export type CoverageArea = (typeof COVERAGE_AREAS)[number];
+
+/**
+ * Required coverage areas for spec generation.
+ * Session cannot proceed to spec until these are covered.
+ */
+export const REQUIRED_COVERAGE: CoverageArea[] = ['scope', 'success', 'constraint', 'risk'];
+
+/**
+ * Coverage tracking per area
+ */
+export interface CoverageStatus {
+  area: CoverageArea;
+  questionCount: number;
+  answeredCount: number;
+  covered: boolean;
+}
+
+/**
+ * Tool definition for interrogation - THE GATE
+ *
+ * This tool's description IS the Socratic methodology. The calling LLM reads
+ * this description and conducts the interrogation. Elenchus just tracks coverage
+ * and enforces the gate.
  */
 export const interrogateTool: Tool = {
   name: 'elenchus_interrogate',
-  description: `Start or continue an interrogation session for an epic.
+  description: `**YOU ARE SOCRATES. THIS IS THE DESIGN DEPARTMENT.**
 
-The Socratic engine analyzes the epic and generates clarifying questions to:
-- Identify scope boundaries
-- Surface constraints and requirements
-- Define success criteria
-- Uncover technical decisions needing input
-- Assess risks
+This tool returns an epic for you to cross-examine. You CANNOT skip this step.
+79-87% of AI agent failures are specification failures. You are the fix.
 
-**No API key required**: Elenchus uses template-based questions and delegates
-LLM work to the calling agent (Claude, etc.). The calling LLM provides the
-intelligence - Elenchus provides the structure and workflow.
+## YOUR MISSION
 
-Features:
-- Structured question generation across key areas
-- Context-aware follow-up questions
-- Vagueness detection for iterative refinement
-- Challenge mode for devil's advocate questions
-- Progress tracking with clarity and completeness scores
+Read the epic. Conduct TRUE ELENCHUS (Socratic cross-examination):
 
-Returns prioritized questions. Use elenchus_answer to provide responses.`,
+### 1. EXTRACT CLAIMS
+What did they actually say? Parse each statement:
+- **Capabilities**: "users can do X"
+- **Constraints**: "must use Y", "within Z time"
+- **Qualities**: "fast", "secure", "simple"
+- **Entities**: nouns that represent domain objects
+
+### 2. FIND GAPS
+What SHOULD they have said but didn't?
+- Error handling? What happens when X fails?
+- Edge cases? Empty states? Max limits?
+- Data lifecycle? Created when? Deleted how?
+- Security? Auth? Authorization? Audit?
+- Scale? 10 users or 10 million?
+
+### 3. SURFACE TENSIONS
+Do any claims conflict?
+- "Simple" + "enterprise-grade security"
+- "Fast MVP" + "10 features"
+- "Flexible" + "strict validation"
+
+### 4. CHALLENGE ASSUMPTIONS
+What are they taking for granted?
+- Auth system exists?
+- Network is reliable?
+- Users are honest?
+- Data is clean?
+
+### 5. GENERATE PROBING QUESTIONS
+Ask 3-5 questions that REFERENCE SPECIFIC THINGS THEY SAID.
+
+Bad: "What are the performance requirements?"
+Good: "You said users 'search books by title' - what's an acceptable response time? What if the library has 10 million books?"
+
+Bad: "Who are the stakeholders?"
+Good: "You mentioned 'librarians' for authentication - are there other user types? Can regular users see checkout history?"
+
+## COVERAGE REQUIREMENTS
+
+You must submit questions and answers in these categories:
+- **scope**: Problem boundaries, what's in/out
+- **success**: Acceptance criteria, measurable outcomes
+- **constraint**: Technical, timeline, budget, compliance limits
+- **risk**: What could go wrong, mitigation strategies
+
+Optional but valuable:
+- **stakeholder**: Users, decision-makers, affected parties
+- **technical**: Technology choices, patterns, integrations
+
+## WORKFLOW
+
+1. Call this tool to get the epic and current coverage state
+2. Read the epic carefully, looking for claims, gaps, and tensions
+3. Formulate probing questions (not generic template questions)
+4. Ask the USER those questions (they're the domain expert, not you)
+5. Call elenchus_answer with the user's responses, categorized by type
+6. Repeat until all required coverage areas are satisfied
+7. Call elenchus_generate_spec to get organized data for synthesis
+
+## CRITICAL
+
+- DO NOT generate your own answers. The user knows their domain.
+- DO NOT ask generic questions. Reference what they actually said.
+- DO NOT proceed to spec generation until coverage is 80%+.
+- Your questions should make the user THINK, not just confirm.`,
 
   inputSchema: {
     type: 'object',
@@ -51,19 +132,9 @@ Returns prioritized questions. Use elenchus_answer to provide responses.`,
         type: 'string',
         description: 'Continue an existing session (optional)',
       },
-      forceNewRound: {
-        type: 'boolean',
-        description: 'Force a new round of questions',
-        default: false,
-      },
       forceReady: {
         type: 'boolean',
         description: 'Force spec-ready state if clarity >= 80% (escape hatch)',
-        default: false,
-      },
-      challengeMode: {
-        type: 'boolean',
-        description: 'Enable devil\'s advocate questions to surface assumptions and alternatives',
         default: false,
       },
     },
@@ -73,33 +144,52 @@ Returns prioritized questions. Use elenchus_answer to provide responses.`,
 
 /**
  * Result returned by the interrogate tool
- *
- * V2 Philosophy: We return detection signals and guidance for the CALLING LLM
- * to formulate Socratic questions. Elenchus detects patterns; Claude reasons.
  */
 export interface InterrogationToolResult {
+  /** The epic being interrogated */
+  epic: {
+    id: string;
+    title?: string;
+    description: string;
+    rawContent: string;
+    source: string;
+  };
+
   /** The session state */
-  session: InterrogationSession;
+  session: {
+    id: string;
+    round: number;
+    status: InterrogationSession['status'];
+  };
 
-  /** Detection signals for the LLM to reason about */
-  signals: InterrogationSignals;
+  /** Coverage by area - the core metric */
+  coverage: Record<CoverageArea, CoverageStatus>;
 
-  /** Structured guidance for Socratic questioning */
-  guidance: SocraticGuidance;
+  /** Overall metrics */
+  metrics: {
+    totalQuestions: number;
+    totalAnswered: number;
+    clarityScore: number;
+    readyForSpec: boolean;
+    missingAreas: CoverageArea[];
+  };
 
-  /**
-   * Template questions as a fallback/baseline.
-   * The calling LLM should use the signals and guidance to formulate
-   * better, more contextual questions - but these are available if needed.
-   */
-  templateQuestions: Question[];
+  /** All questions and answers so far (for context) */
+  questionsAndAnswers: Array<{
+    id: string;
+    type: string;
+    priority: string;
+    question: string;
+    answer?: string | undefined;
+    answeredAt?: string | undefined;
+  }>;
 
-  /** Whether the session is ready for spec generation */
-  readyForSpec: boolean;
+  /** What to do next */
+  nextStep: string;
 }
 
 /**
- * Handle interrogation with V2 engine (LLM-powered Socratic guidance)
+ * Handle interrogation - returns epic + state for the calling LLM to cross-examine
  */
 export async function handleInterrogate(
   args: Record<string, unknown>,
@@ -113,11 +203,6 @@ export async function handleInterrogate(
     throw new Error(`Epic not found: ${input.epicId}`);
   }
 
-  logger.info('Starting V2 interrogation', {
-    epicId: input.epicId,
-    challengeMode: input.challengeMode ?? false,
-  });
-
   // Get or create session
   let session: InterrogationSession;
   if (input.sessionId) {
@@ -127,62 +212,92 @@ export async function handleInterrogate(
     }
     session = existingSession;
   } else {
-    // Check for existing session
+    // Check for existing session for this epic
     const existingSessions = storage.getSessionsForEpic(input.epicId);
-    if (existingSessions.length > 0 && !input.forceNewRound) {
+    if (existingSessions.length > 0) {
       session = existingSessions[0]!;
     } else {
       session = createNewSession(input.epicId);
+      storage.saveSession(session);
     }
   }
 
-  // Generate template questions for baseline (V1 compatibility)
-  // These are simple structural questions, not the "intelligence"
-  const templateQuestions = generateBaselineQuestions(session);
+  // Calculate coverage
+  const coverage = calculateCoverage(session);
 
-  // Add new template questions that don't already exist
-  const existingIds = new Set(session.questions.map(q => q.id));
-  const newQuestions = templateQuestions.filter(q => !existingIds.has(q.id));
-  session.questions = [...session.questions, ...newQuestions];
+  // Calculate clarity score (percentage of required areas covered)
+  const requiredCoverage = REQUIRED_COVERAGE.map(area => coverage[area]);
+  const coveredRequired = requiredCoverage.filter(c => c.covered).length;
+  const clarityScore = Math.round((coveredRequired / REQUIRED_COVERAGE.length) * 100);
 
-  // Run V2 interrogation engine
-  const v2Result = runInterrogationV2(epic, session);
+  // Find missing areas
+  const missingAreas = REQUIRED_COVERAGE.filter(area => !coverage[area].covered);
+
+  // Determine if ready for spec
+  let readyForSpec = clarityScore >= 80 && missingAreas.length === 0;
 
   // Handle forceReady escape hatch
-  if (input.forceReady && v2Result.guidance.readinessAssessment.canForceReady) {
+  if (input.forceReady && clarityScore >= 80) {
+    readyForSpec = true;
     session.readyForSpec = true;
     session.blockers = [];
+    storage.saveSession(session);
   }
 
-  // Update session state
-  session.status = session.answers.length === 0 ? 'pending' : 'waiting';
-  session.updatedAt = new Date().toISOString();
-
-  // Save session
+  // Update session clarity score
+  session.clarityScore = clarityScore;
+  session.readyForSpec = readyForSpec;
   storage.saveSession(session);
 
-  // Get unanswered template questions for fallback
+  // Build Q&A list
   const answeredIds = new Set(session.answers.map(a => a.questionId));
-  const unansweredTemplates = session.questions.filter(q => !answeredIds.has(q.id));
-
-  logger.info('V2 interrogation complete', {
-    epicId: input.epicId,
-    sessionId: session.id,
-    clarityScore: session.clarityScore,
-    signalsDetected: {
-      vague: v2Result.signals.metrics.vagueAnswerCount,
-      contradictions: v2Result.signals.metrics.contradictionCount,
-      gaps: v2Result.signals.metrics.gapCount,
-      assumptions: v2Result.signals.metrics.assumptionCount,
-    },
+  const questionsAndAnswers = session.questions.map(q => {
+    const answer = session.answers.find(a => a.questionId === q.id);
+    return {
+      id: q.id,
+      type: q.type,
+      priority: q.priority,
+      question: q.question,
+      answer: answer?.answer,
+      answeredAt: answer?.answeredAt,
+    };
   });
 
+  // Determine next step
+  let nextStep: string;
+  if (readyForSpec) {
+    nextStep = 'Ready for spec generation! Call elenchus_generate_spec with this session ID.';
+  } else if (missingAreas.length > 0) {
+    nextStep = `Ask the user probing questions about: ${missingAreas.join(', ')}. Submit answers via elenchus_answer.`;
+  } else if (clarityScore < 80) {
+    nextStep = `Clarity at ${clarityScore}%. Need more detailed answers in covered areas. Use forceReady=true to override if you're confident.`;
+  } else {
+    nextStep = 'Call elenchus_generate_spec to proceed with specification synthesis.';
+  }
+
   return {
-    session: v2Result.session,
-    signals: v2Result.signals,
-    guidance: v2Result.guidance,
-    templateQuestions: unansweredTemplates,
-    readyForSpec: session.readyForSpec,
+    epic: {
+      id: epic.id,
+      title: epic.title,
+      description: epic.description,
+      rawContent: epic.rawContent,
+      source: epic.source,
+    },
+    session: {
+      id: session.id,
+      round: session.round,
+      status: session.status,
+    },
+    coverage,
+    metrics: {
+      totalQuestions: session.questions.length,
+      totalAnswered: answeredIds.size,
+      clarityScore,
+      readyForSpec,
+      missingAreas,
+    },
+    questionsAndAnswers,
+    nextStep,
   };
 }
 
@@ -211,82 +326,25 @@ function createNewSession(epicId: string): InterrogationSession {
 }
 
 /**
- * Generate baseline template questions for structural coverage.
- *
- * These are NOT the "intelligence" - they're simple structural questions
- * to ensure basic coverage. The calling LLM should use the signals and
- * guidance to ask better, more contextual follow-up questions.
+ * Calculate coverage by area based on questions and answers
  */
-function generateBaselineQuestions(session: InterrogationSession): Question[] {
-  const questions: Question[] = [];
+function calculateCoverage(session: InterrogationSession): Record<CoverageArea, CoverageStatus> {
+  const coverage: Record<CoverageArea, CoverageStatus> = {} as Record<CoverageArea, CoverageStatus>;
 
-  // Only generate if no questions exist yet
-  if (session.questions.length > 0) {
-    return [];
+  for (const area of COVERAGE_AREAS) {
+    const questionsInArea = session.questions.filter(q => q.type === area);
+    const answeredInArea = questionsInArea.filter(q =>
+      session.answers.some(a => a.questionId === q.id)
+    );
+
+    coverage[area] = {
+      area,
+      questionCount: questionsInArea.length,
+      answeredCount: answeredInArea.length,
+      // Covered if at least one question is answered in this area
+      covered: answeredInArea.length > 0,
+    };
   }
 
-  // Minimal set of structural questions by type
-  const baselineQuestions: Array<{
-    type: Question['type'];
-    priority: Question['priority'];
-    question: string;
-    context: string;
-  }> = [
-    {
-      type: 'scope',
-      priority: 'critical',
-      question: 'What problem are we solving? What is explicitly OUT of scope?',
-      context: 'Understanding scope boundaries prevents feature creep and clarifies priorities.',
-    },
-    {
-      type: 'success',
-      priority: 'critical',
-      question: 'How will we know this is successful? What are the measurable acceptance criteria?',
-      context: 'Concrete success criteria drive implementation decisions.',
-    },
-    {
-      type: 'constraint',
-      priority: 'critical',
-      question: 'What constraints must we work within? (tech stack, timeline, budget, compliance)',
-      context: 'Constraints shape the solution space.',
-    },
-    {
-      type: 'technical',
-      priority: 'important',
-      question: 'What is the technical approach? What technologies and patterns will be used?',
-      context: 'Technical decisions affect implementation and timeline.',
-    },
-    {
-      type: 'stakeholder',
-      priority: 'important',
-      question: 'Who are the users? Who are the stakeholders?',
-      context: 'Understanding users and stakeholders shapes UX and priorities.',
-    },
-    {
-      type: 'risk',
-      priority: 'important',
-      question: 'What could go wrong? What are the main risks?',
-      context: 'Identifying risks early allows for mitigation planning.',
-    },
-    {
-      type: 'timeline',
-      priority: 'nice-to-have',
-      question: 'What is the timeline? Are there key milestones or deadlines?',
-      context: 'Timeline constraints affect scope and approach.',
-    },
-  ];
-
-  for (const q of baselineQuestions) {
-    questions.push({
-      id: generateId('q'),
-      type: q.type,
-      priority: q.priority,
-      question: q.question,
-      context: q.context,
-      targetAudience: 'both',
-      source: 'template',
-    });
-  }
-
-  return questions;
+  return coverage;
 }

@@ -20,6 +20,39 @@ import { generateId } from '../utils/id.js';
 import { logger } from '../utils/logger.js';
 
 /**
+ * Execution record - feedback from executing a specification
+ */
+export interface ExecutionRecord {
+  id: string;
+  specId: string;
+  epicId: string;
+  phase: string;
+  taskId: string;
+  status: 'success' | 'failure' | 'partial';
+  output: string;
+  errors?: string[];
+  tokensUsed?: number;
+  durationMs?: number;
+  timestamp: string;
+}
+
+/**
+ * Prompt insight - learned patterns from successful executions
+ */
+export interface PromptInsight {
+  id: string;
+  pattern: string;
+  description: string;
+  context: string;
+  successRate: number;
+  usageCount: number;
+  examples: Array<{ specId: string; outcome: string }>;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
  * Storage layer for Elenchus
  *
  * Uses SQLite for persistence, stores JSON documents.
@@ -121,6 +154,35 @@ export class Storage {
         FOREIGN KEY (spec_id) REFERENCES specs(id)
       );
 
+      CREATE TABLE IF NOT EXISTS execution_records (
+        id TEXT PRIMARY KEY,
+        spec_id TEXT NOT NULL,
+        epic_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        output TEXT NOT NULL,
+        errors TEXT,
+        tokens_used INTEGER,
+        duration_ms INTEGER,
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY (spec_id) REFERENCES specs(id),
+        FOREIGN KEY (epic_id) REFERENCES epics(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS prompt_insights (
+        id TEXT PRIMARY KEY,
+        pattern TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL,
+        context TEXT NOT NULL,
+        success_rate REAL NOT NULL,
+        usage_count INTEGER NOT NULL DEFAULT 0,
+        examples TEXT NOT NULL,
+        tags TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       -- Indexes for common queries
       CREATE INDEX IF NOT EXISTS idx_sessions_epic ON sessions(epic_id);
       CREATE INDEX IF NOT EXISTS idx_specs_epic ON specs(epic_id);
@@ -130,6 +192,12 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_checkpoint_decisions_checkpoint ON checkpoint_decisions(checkpoint_id);
       CREATE INDEX IF NOT EXISTS idx_deliveries_spec ON deliveries(spec_id);
       CREATE INDEX IF NOT EXISTS idx_deliveries_epic ON deliveries(epic_id);
+      CREATE INDEX IF NOT EXISTS idx_execution_records_spec ON execution_records(spec_id);
+      CREATE INDEX IF NOT EXISTS idx_execution_records_epic ON execution_records(epic_id);
+      CREATE INDEX IF NOT EXISTS idx_execution_records_timestamp ON execution_records(timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_prompt_insights_pattern ON prompt_insights(pattern);
+      CREATE INDEX IF NOT EXISTS idx_prompt_insights_success_rate ON prompt_insights(success_rate DESC);
+      CREATE INDEX IF NOT EXISTS idx_prompt_insights_usage ON prompt_insights(usage_count DESC);
     `);
   }
 
@@ -442,6 +510,162 @@ export class Storage {
         }
       })
       .filter((delivery): delivery is Delivery => delivery !== null);
+  }
+
+  // Execution record operations
+
+  saveExecutionRecord(record: ExecutionRecord): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO execution_records (
+        id, spec_id, epic_id, phase, task_id, status,
+        output, errors, tokens_used, duration_ms, timestamp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      record.id,
+      record.specId,
+      record.epicId,
+      record.phase,
+      record.taskId,
+      record.status,
+      record.output,
+      record.errors ? JSON.stringify(record.errors) : null,
+      record.tokensUsed ?? null,
+      record.durationMs ?? null,
+      record.timestamp
+    );
+  }
+
+  getExecutionRecordsForSpec(specId: string): ExecutionRecord[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM execution_records
+      WHERE spec_id = ?
+      ORDER BY timestamp ASC
+    `);
+    const rows = stmt.all(specId) as Array<{
+      id: string;
+      spec_id: string;
+      epic_id: string;
+      phase: string;
+      task_id: string;
+      status: 'success' | 'failure' | 'partial';
+      output: string;
+      errors: string | null;
+      tokens_used: number | null;
+      duration_ms: number | null;
+      timestamp: string;
+    }>;
+
+    return rows.map((row): ExecutionRecord => {
+      const record: ExecutionRecord = {
+        id: row.id,
+        specId: row.spec_id,
+        epicId: row.epic_id,
+        phase: row.phase,
+        taskId: row.task_id,
+        status: row.status,
+        output: row.output,
+        timestamp: row.timestamp,
+      };
+
+      if (row.errors) {
+        record.errors = JSON.parse(row.errors);
+      }
+      if (row.tokens_used !== null) {
+        record.tokensUsed = row.tokens_used;
+      }
+      if (row.duration_ms !== null) {
+        record.durationMs = row.duration_ms;
+      }
+
+      return record;
+    });
+  }
+
+  // Prompt insight operations
+
+  savePromptInsight(insight: PromptInsight): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO prompt_insights (
+        id, pattern, description, context, success_rate,
+        usage_count, examples, tags, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      insight.id,
+      insight.pattern,
+      insight.description,
+      insight.context,
+      insight.successRate,
+      insight.usageCount,
+      JSON.stringify(insight.examples),
+      JSON.stringify(insight.tags),
+      insight.createdAt,
+      insight.updatedAt
+    );
+  }
+
+  getPromptInsight(pattern: string): PromptInsight | undefined {
+    const stmt = this.db.prepare('SELECT * FROM prompt_insights WHERE pattern = ?');
+    const row = stmt.get(pattern) as {
+      id: string;
+      pattern: string;
+      description: string;
+      context: string;
+      success_rate: number;
+      usage_count: number;
+      examples: string;
+      tags: string;
+      created_at: string;
+      updated_at: string;
+    } | undefined;
+
+    if (!row) return undefined;
+
+    return {
+      id: row.id,
+      pattern: row.pattern,
+      description: row.description,
+      context: row.context,
+      successRate: row.success_rate,
+      usageCount: row.usage_count,
+      examples: JSON.parse(row.examples),
+      tags: JSON.parse(row.tags),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listPromptInsights(): PromptInsight[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM prompt_insights
+      ORDER BY success_rate DESC, usage_count DESC
+    `);
+    const rows = stmt.all() as Array<{
+      id: string;
+      pattern: string;
+      description: string;
+      context: string;
+      success_rate: number;
+      usage_count: number;
+      examples: string;
+      tags: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      pattern: row.pattern,
+      description: row.description,
+      context: row.context,
+      successRate: row.success_rate,
+      usageCount: row.usage_count,
+      examples: JSON.parse(row.examples),
+      tags: JSON.parse(row.tags),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
   }
 
   // Utility

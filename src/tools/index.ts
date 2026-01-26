@@ -13,6 +13,7 @@ import { analyzeTool, handleAnalyze } from './analyze.js';
 import { interrogateTool, handleInterrogate } from './interrogate.js';
 import { answerTool, handleAnswer } from './answer.js';
 import { generateSpecTool, handleGenerateSpec } from './generate-spec.js';
+import { compileTool, handleCompile } from './compile.js';
 import { validateTool, handleValidate } from './validate.js';
 import { statusTool, handleStatus } from './status.js';
 import { healthTool, handleHealth } from './health.js';
@@ -35,6 +36,7 @@ export function registerTools(): Tool[] {
     interrogateTool,
     answerTool,
     generateSpecTool,
+    compileTool,
     validateTool,
     statusTool,
     healthTool,
@@ -142,6 +144,10 @@ export async function handleToolCall(
 
           case 'elenchus_generate_spec':
             result = await handleGenerateSpec(args, storage);
+            break;
+
+          case 'elenchus_compile':
+            result = await handleCompile(args, storage);
             break;
 
           case 'elenchus_validate':

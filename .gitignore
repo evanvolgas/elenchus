@@ -40,3 +40,12 @@ elenchus.config.json
 # Claude Flow
 .claude-flow/
 .swarm/
+
+# Design specs and research (internal working docs)
+docs/idea*.md
+docs/research-*.md
+docs/ADR-*.md
+docs/competitive-*.md
+docs/gap-*.md
+docs/socratic-*.md
+docs/ai-coding-*.md
