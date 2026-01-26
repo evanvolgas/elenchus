@@ -54,3 +54,40 @@ export {
   type ChallengeType,
   type ChallengeQuestion,
 } from './challenge-mode.js';
+
+// V2: Signal Detector - pattern detection for LLM-guided interrogation
+export {
+  detectSignals,
+  detectVagueness,
+  detectContradictions,
+  detectCoverageGaps,
+  detectAssumptions,
+  detectStack,
+  extractSpecificityMarkers,
+  extractTechnicalDecisions,
+  type InterrogationSignals,
+  type AnswerSignals,
+  type VaguenessIndicator,
+  type ContradictionSignal,
+  type CoverageGap,
+  type AssumptionSignal,
+} from './signal-detector.js';
+
+// V2: Interrogation Engine - LLM-powered Socratic guidance
+export {
+  runInterrogationV2,
+  generateGuidance,
+  type SocraticGuidance,
+  type FocusArea,
+  type ProbeTarget,
+  type InterrogationContext,
+  type ReadinessAssessment,
+  type InterrogationResultV2,
+} from './interrogation-v2.js';
+
+// Answer Extractor - organizes answers by type (no fake intelligence)
+export {
+  organizeAnswers,
+  type OrganizedAnswers,
+  type AnswerWithContext,
+} from './answer-extractor.js';

@@ -3,18 +3,14 @@ import type { Storage } from '../storage/index.js';
 import {
   type InterrogationSession,
   type Question,
-  type QuestionType,
-  type InterrogationResult,
   InterrogateInputSchema,
 } from '../types/index.js';
 import { generateId } from '../utils/id.js';
 import { logger } from '../utils/logger.js';
 import {
-  QuestionGenerator,
-  createQuestionGenerator,
-  LLMClient,
-  createClient,
-  ChallengeModeEngine,
+  runInterrogationV2,
+  type SocraticGuidance,
+  type InterrogationSignals,
 } from '../engines/index.js';
 
 /**
@@ -75,39 +71,40 @@ Returns prioritized questions. Use elenchus_answer to provide responses.`,
   },
 };
 
-// Lazy-initialized singletons
-let llmClient: LLMClient | null = null;
-let questionGenerator: QuestionGenerator | null = null;
-let challengeEngine: ChallengeModeEngine | null = null;
+/**
+ * Result returned by the interrogate tool
+ *
+ * V2 Philosophy: We return detection signals and guidance for the CALLING LLM
+ * to formulate Socratic questions. Elenchus detects patterns; Claude reasons.
+ */
+export interface InterrogationToolResult {
+  /** The session state */
+  session: InterrogationSession;
 
-function getLLMClient(): LLMClient {
-  if (!llmClient) {
-    llmClient = createClient();
-  }
-  return llmClient;
-}
+  /** Detection signals for the LLM to reason about */
+  signals: InterrogationSignals;
 
-function getQuestionGenerator(): QuestionGenerator {
-  if (!questionGenerator) {
-    questionGenerator = createQuestionGenerator();
-  }
-  return questionGenerator;
-}
+  /** Structured guidance for Socratic questioning */
+  guidance: SocraticGuidance;
 
-function getChallengeEngine(): ChallengeModeEngine {
-  if (!challengeEngine) {
-    challengeEngine = new ChallengeModeEngine();
-  }
-  return challengeEngine;
+  /**
+   * Template questions as a fallback/baseline.
+   * The calling LLM should use the signals and guidance to formulate
+   * better, more contextual questions - but these are available if needed.
+   */
+  templateQuestions: Question[];
+
+  /** Whether the session is ready for spec generation */
+  readyForSpec: boolean;
 }
 
 /**
- * Handle interrogation with V2 engine integration
+ * Handle interrogation with V2 engine (LLM-powered Socratic guidance)
  */
 export async function handleInterrogate(
   args: Record<string, unknown>,
   storage: Storage
-): Promise<InterrogationResult> {
+): Promise<InterrogationToolResult> {
   const input = InterrogateInputSchema.parse(args);
 
   // Get epic
@@ -116,13 +113,8 @@ export async function handleInterrogate(
     throw new Error(`Epic not found: ${input.epicId}`);
   }
 
-  // Check LLM availability
-  const client = getLLMClient();
-  const useLLM = client.isAvailable();
-
-  logger.info('Starting interrogation', {
+  logger.info('Starting V2 interrogation', {
     epicId: input.epicId,
-    useLLM,
     challengeMode: input.challengeMode ?? false,
   });
 
@@ -140,123 +132,64 @@ export async function handleInterrogate(
     if (existingSessions.length > 0 && !input.forceNewRound) {
       session = existingSessions[0]!;
     } else {
-      session = createNewSession(input.epicId, input.config);
+      session = createNewSession(input.epicId);
     }
   }
 
-  // Check if we should start a new round based on whether all current questions are answered
-  const currentAnsweredIds = new Set(session.answers.map(a => a.questionId));
-  const unansweredCount = session.questions.filter(q => !currentAnsweredIds.has(q.id)).length;
-  const shouldAdvanceRound = input.forceNewRound || (unansweredCount === 0 && session.questions.length > 0);
+  // Generate template questions for baseline (V1 compatibility)
+  // These are simple structural questions, not the "intelligence"
+  const templateQuestions = generateBaselineQuestions(session);
 
-  if (shouldAdvanceRound && session.round < session.maxRounds) {
-    session.round += 1;
-    logger.debug('Starting new round', { round: session.round });
-  }
-
-  // Generate questions using V2 QuestionGenerator
-  const generator = getQuestionGenerator();
-  const generatedQuestions = await generator.generate(
-    {
-      epic,
-      previousAnswers: session.answers,
-      round: session.round,
-      maxRounds: session.maxRounds,
-      challengeMode: input.challengeMode ?? false,
-    },
-    useLLM
-  );
-
-  // Add challenge mode questions if enabled
-  let challengeQuestions: Question[] = [];
-  if (input.challengeMode && session.answers.length > 0) {
-    const engine = getChallengeEngine();
-    challengeQuestions = await engine.generateChallengeQuestions(
-      epic,
-      session.answers
-    );
-    logger.debug('Generated challenge questions', { count: challengeQuestions.length });
-  }
-
-  // Merge new questions (avoid duplicates)
-  const allNewQuestions = [...generatedQuestions, ...challengeQuestions];
+  // Add new template questions that don't already exist
   const existingIds = new Set(session.questions.map(q => q.id));
-  const uniqueNewQuestions = allNewQuestions.filter(q => !existingIds.has(q.id));
+  const newQuestions = templateQuestions.filter(q => !existingIds.has(q.id));
+  session.questions = [...session.questions, ...newQuestions];
 
-  session.questions = [...session.questions, ...uniqueNewQuestions];
-  session.status = 'waiting';
-  session.updatedAt = new Date().toISOString();
+  // Run V2 interrogation engine
+  const v2Result = runInterrogationV2(epic, session);
 
-  // Calculate scores using RoundController
-  const { clarityScore, completenessScore } = calculateScores(session);
-  session.clarityScore = clarityScore;
-  session.completenessScore = completenessScore;
-
-  // Check readiness with escape hatch support
-  const canEscape = input.forceReady && clarityScore >= (input.config?.escapeThreshold ?? 80);
-  session.readyForSpec = (clarityScore >= 70 && completenessScore >= 70) || canEscape;
-  session.blockers = getBlockers(session);
-
-  // Generate round summary for V2 response
-  const answeredThisRound = session.answers.filter(a => {
-    const q = session.questions.find(q => q.id === a.questionId);
-    return q !== undefined;
-  }).length;
-
-  const roundSummary = {
-    round: session.round,
-    questionsAsked: session.questions.length,
-    questionsAnswered: answeredThisRound,
-    clarityDelta: 0, // Would need previous clarity to calculate
-    readyForSpec: session.readyForSpec,
-    canEscape,
-  };
-
-  // Check for max rounds warning
-  const warnings = [];
-  if (session.round >= session.maxRounds && !session.readyForSpec) {
-    warnings.push({
-      type: 'max-rounds-reached' as const,
-      message: `Maximum rounds (${session.maxRounds}) reached. Consider using forceReady if clarity is sufficient.`,
-      gaps: session.blockers,
-      severity: 'warning' as const,
-    });
+  // Handle forceReady escape hatch
+  if (input.forceReady && v2Result.guidance.readinessAssessment.canForceReady) {
+    session.readyForSpec = true;
+    session.blockers = [];
   }
+
+  // Update session state
+  session.status = session.answers.length === 0 ? 'pending' : 'waiting';
+  session.updatedAt = new Date().toISOString();
 
   // Save session
   storage.saveSession(session);
 
-  // Get unanswered questions
+  // Get unanswered template questions for fallback
   const answeredIds = new Set(session.answers.map(a => a.questionId));
-  const nextQuestions = session.questions.filter(q => !answeredIds.has(q.id));
+  const unansweredTemplates = session.questions.filter(q => !answeredIds.has(q.id));
 
-  const result: InterrogationResult = {
-    session,
-    nextQuestions,
-    readyForSpec: session.readyForSpec,
-    recommendations: getRecommendations(session, useLLM),
-    roundSummary,
-  };
-
-  if (warnings.length > 0) {
-    result.warnings = warnings;
-  }
-
-  logger.info('Interrogation complete', {
+  logger.info('V2 interrogation complete', {
     epicId: input.epicId,
     sessionId: session.id,
     clarityScore: session.clarityScore,
-    questionsGenerated: uniqueNewQuestions.length,
-    usedLLM: useLLM,
+    signalsDetected: {
+      vague: v2Result.signals.metrics.vagueAnswerCount,
+      contradictions: v2Result.signals.metrics.contradictionCount,
+      gaps: v2Result.signals.metrics.gapCount,
+      assumptions: v2Result.signals.metrics.assumptionCount,
+    },
   });
 
-  return result;
+  return {
+    session: v2Result.session,
+    signals: v2Result.signals,
+    guidance: v2Result.guidance,
+    templateQuestions: unansweredTemplates,
+    readyForSpec: session.readyForSpec,
+  };
 }
 
-function createNewSession(
-  epicId: string,
-  config?: { maxRounds?: number; escapeThreshold?: number }
-): InterrogationSession {
+/**
+ * Create a new interrogation session
+ */
+function createNewSession(epicId: string): InterrogationSession {
   const id = generateId('session');
   const now = new Date().toISOString();
 
@@ -271,92 +204,89 @@ function createNewSession(
     readyForSpec: false,
     blockers: [],
     round: 1,
-    maxRounds: config?.maxRounds ?? 10, // V2 default: 10 rounds
+    maxRounds: 10,
     startedAt: now,
     updatedAt: now,
   };
 }
 
-function calculateScores(session: InterrogationSession): {
-  clarityScore: number;
-  completenessScore: number;
-} {
-  const answeredIds = new Set(session.answers.map(a => a.questionId));
-  const criticalQuestions = session.questions.filter(q => q.priority === 'critical');
-  const importantQuestions = session.questions.filter(q => q.priority === 'important');
+/**
+ * Generate baseline template questions for structural coverage.
+ *
+ * These are NOT the "intelligence" - they're simple structural questions
+ * to ensure basic coverage. The calling LLM should use the signals and
+ * guidance to ask better, more contextual follow-up questions.
+ */
+function generateBaselineQuestions(session: InterrogationSession): Question[] {
+  const questions: Question[] = [];
 
-  // Clarity: based on quality of answers (simplified)
-  const answeredCritical = criticalQuestions.filter(q => answeredIds.has(q.id)).length;
-  const answeredImportant = importantQuestions.filter(q => answeredIds.has(q.id)).length;
-
-  let clarityScore = 30; // Base score
-  if (criticalQuestions.length > 0) {
-    clarityScore += (answeredCritical / criticalQuestions.length) * 40;
-  } else {
-    clarityScore += 40;
-  }
-  if (importantQuestions.length > 0) {
-    clarityScore += (answeredImportant / importantQuestions.length) * 30;
-  } else {
-    clarityScore += 30;
+  // Only generate if no questions exist yet
+  if (session.questions.length > 0) {
+    return [];
   }
 
-  // Completeness: based on coverage of question types
-  const answeredTypes = new Set(
-    session.questions
-      .filter(q => answeredIds.has(q.id))
-      .map(q => q.type)
-  );
+  // Minimal set of structural questions by type
+  const baselineQuestions: Array<{
+    type: Question['type'];
+    priority: Question['priority'];
+    question: string;
+    context: string;
+  }> = [
+    {
+      type: 'scope',
+      priority: 'critical',
+      question: 'What problem are we solving? What is explicitly OUT of scope?',
+      context: 'Understanding scope boundaries prevents feature creep and clarifies priorities.',
+    },
+    {
+      type: 'success',
+      priority: 'critical',
+      question: 'How will we know this is successful? What are the measurable acceptance criteria?',
+      context: 'Concrete success criteria drive implementation decisions.',
+    },
+    {
+      type: 'constraint',
+      priority: 'critical',
+      question: 'What constraints must we work within? (tech stack, timeline, budget, compliance)',
+      context: 'Constraints shape the solution space.',
+    },
+    {
+      type: 'technical',
+      priority: 'important',
+      question: 'What is the technical approach? What technologies and patterns will be used?',
+      context: 'Technical decisions affect implementation and timeline.',
+    },
+    {
+      type: 'stakeholder',
+      priority: 'important',
+      question: 'Who are the users? Who are the stakeholders?',
+      context: 'Understanding users and stakeholders shapes UX and priorities.',
+    },
+    {
+      type: 'risk',
+      priority: 'important',
+      question: 'What could go wrong? What are the main risks?',
+      context: 'Identifying risks early allows for mitigation planning.',
+    },
+    {
+      type: 'timeline',
+      priority: 'nice-to-have',
+      question: 'What is the timeline? Are there key milestones or deadlines?',
+      context: 'Timeline constraints affect scope and approach.',
+    },
+  ];
 
-  const requiredTypes: QuestionType[] = ['scope', 'success', 'constraint'];
-  const hasRequired = requiredTypes.filter(t => answeredTypes.has(t)).length;
-  const completenessScore = 40 + (hasRequired / requiredTypes.length) * 60;
-
-  return {
-    clarityScore: Math.min(Math.round(clarityScore), 100),
-    completenessScore: Math.min(Math.round(completenessScore), 100),
-  };
-}
-
-function getBlockers(session: InterrogationSession): string[] {
-  const blockers: string[] = [];
-  const answeredIds = new Set(session.answers.map(a => a.questionId));
-
-  const unansweredCritical = session.questions.filter(
-    q => q.priority === 'critical' && !answeredIds.has(q.id)
-  );
-
-  for (const q of unansweredCritical) {
-    blockers.push(`Unanswered critical question: "${q.question}"`);
+  for (const q of baselineQuestions) {
+    questions.push({
+      id: generateId('q'),
+      type: q.type,
+      priority: q.priority,
+      question: q.question,
+      context: q.context,
+      targetAudience: 'both',
+      source: 'template',
+    });
   }
 
-  return blockers;
-}
-
-function getRecommendations(session: InterrogationSession, _useLLM: boolean): string[] {
-  const recommendations: string[] = [];
-
-  // Note: Elenchus uses template-based questions by design.
-  // When called via MCP, the calling LLM (Claude, etc.) provides the intelligence.
-  // No separate API key is needed - Elenchus delegates LLM work to the caller.
-
-  if (session.clarityScore < 50) {
-    recommendations.push('Answer more questions to improve clarity');
-  }
-
-  if (session.readyForSpec) {
-    recommendations.push('Ready to generate specification! Use elenchus_generate_spec');
-  } else {
-    recommendations.push('Continue answering questions to reach spec-ready state');
-  }
-
-  if (session.blockers.length > 0) {
-    recommendations.push(`${session.blockers.length} blocking issue(s) need resolution`);
-  }
-
-  if (session.round >= session.maxRounds * 0.7) {
-    recommendations.push(`Approaching max rounds (${session.round}/${session.maxRounds}). Consider forceReady if clarity >= 80%`);
-  }
-
-  return recommendations;
+  return questions;
 }
