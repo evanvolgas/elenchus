@@ -83,6 +83,9 @@ export async function handleAnalyze(
 ): Promise<CodebaseContext> {
   const input = AnalyzeInputSchema.parse(args);
 
+  // Clear cached files from previous analyze calls
+  clearSourceFilesCache();
+
   // Validate and normalize path to prevent directory traversal attacks
   let rootPath: string;
   try {
@@ -180,33 +183,23 @@ function detectMaturity(
   rootPath: string,
   _packageJson: Record<string, unknown> | null
 ): CodebaseContext['maturity'] {
-  // Count files across all supported languages
-  let fileCount = 0;
-  let testCount = 0;
+  // Use cached source files - single glob call shared across functions
+  const files = getSourceFiles(rootPath);
+  const fileCount = files.length;
 
-  try {
-    const files = glob.sync('**/*.{ts,tsx,js,jsx,py,go,rs,php}', {
-      cwd: rootPath,
-      ignore: [...COMMON_IGNORE_PATTERNS],
-    });
-    fileCount = files.length;
-
-    // Count test files with language-aware patterns
-    testCount = files.filter(f =>
-      // JavaScript/TypeScript patterns
-      f.includes('.test.') ||
-      f.includes('.spec.') ||
-      f.includes('__tests__') ||
-      // Python patterns
-      f.startsWith('test_') ||
-      f.includes('/test_') ||
-      f.includes('_test.py') ||
-      // Go patterns
-      f.endsWith('_test.go')
-    ).length;
-  } catch (error) {
-    logger.warn('Failed to glob source files during maturity detection', error, { rootPath });
-  }
+  // Count test files with language-aware patterns
+  const testCount = files.filter(f =>
+    // JavaScript/TypeScript patterns
+    f.includes('.test.') ||
+    f.includes('.spec.') ||
+    f.includes('__tests__') ||
+    // Python patterns
+    f.startsWith('test_') ||
+    f.includes('/test_') ||
+    f.includes('_test.py') ||
+    // Go patterns
+    f.endsWith('_test.go')
+  ).length;
 
   // Check for common maturity signals
   const hasTests = testCount > 0;
@@ -364,6 +357,50 @@ function extractDependencies(
   return dependencies;
 }
 
+/**
+ * Cached file list for a given root path to avoid repeated glob calls.
+ * This is reset between analyze calls via the handleAnalyze function.
+ */
+let cachedSourceFiles: { rootPath: string; files: string[] } | null = null;
+
+/**
+ * Get all source files in a directory, using cache if available.
+ * Single glob call to get all files, then filter by extension as needed.
+ */
+function getSourceFiles(rootPath: string): string[] {
+  if (cachedSourceFiles?.rootPath === rootPath) {
+    return cachedSourceFiles.files;
+  }
+
+  try {
+    const files = glob.sync('**/*.{ts,tsx,js,jsx,py,go,rs,php}', {
+      cwd: rootPath,
+      ignore: [...COMMON_IGNORE_PATTERNS],
+    });
+    cachedSourceFiles = { rootPath, files };
+    return files;
+  } catch (error) {
+    logger.warn('Failed to glob source files', error, { rootPath });
+    return [];
+  }
+}
+
+/**
+ * Clear the source files cache. Should be called at the start of each analyze.
+ */
+function clearSourceFilesCache(): void {
+  cachedSourceFiles = null;
+}
+
+/**
+ * Filter source files by extension(s).
+ */
+function filterFilesByExtension(files: string[], extensions: string[]): string[] {
+  return files.filter((f) =>
+    extensions.some((ext) => f.endsWith(ext))
+  );
+}
+
 function detectPrimaryLanguage(
   rootPath: string,
   packageJson: Record<string, unknown> | null
@@ -382,16 +419,16 @@ function detectPrimaryLanguage(
     if ('typescript' in deps) return 'TypeScript';
   }
 
-  // Check for other language files using shared ignore patterns
-  const ignorePatterns = [...COMMON_IGNORE_PATTERNS];
+  // Use cached source files and filter by extension - single glob call
+  const allFiles = getSourceFiles(rootPath);
 
-  const pyFiles = glob.sync('**/*.py', { cwd: rootPath, ignore: ignorePatterns });
+  const pyFiles = filterFilesByExtension(allFiles, ['.py']);
   if (pyFiles.length > 0) return 'Python';
 
-  const goFiles = glob.sync('**/*.go', { cwd: rootPath, ignore: ignorePatterns });
+  const goFiles = filterFilesByExtension(allFiles, ['.go']);
   if (goFiles.length > 0) return 'Go';
 
-  const rsFiles = glob.sync('**/*.rs', { cwd: rootPath, ignore: ignorePatterns });
+  const rsFiles = filterFilesByExtension(allFiles, ['.rs']);
   if (rsFiles.length > 0) return 'Rust';
 
   return 'JavaScript';

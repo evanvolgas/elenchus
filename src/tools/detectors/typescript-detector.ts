@@ -152,10 +152,17 @@ function detectJavaScriptFrameworks(
 
   try {
     const content = readFileSync(packageJsonPath, 'utf-8');
-    const pkg = JSON.parse(content) as {
+    let pkg: {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
+
+    try {
+      pkg = JSON.parse(content) as typeof pkg;
+    } catch {
+      // Malformed package.json - return empty frameworks
+      return frameworks;
+    }
 
     const allDeps = {
       ...(pkg.dependencies ?? {}),

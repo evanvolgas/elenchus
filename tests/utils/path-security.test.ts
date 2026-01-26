@@ -133,8 +133,8 @@ describe('path-security', () => {
     it('should remove glob special characters', () => {
       expect(sanitizeGlobPattern('**/*')).toBe('');
       expect(sanitizeGlobPattern('file[0-9]')).toBe('file0-9');
-      // Comma is kept as it's not a glob special character
-      expect(sanitizeGlobPattern('*.{ts,js}')).toBe('.ts,js');
+      // Comma is also removed as it's used in brace expansion {a,b}
+      expect(sanitizeGlobPattern('*.{ts,js}')).toBe('.tsjs');
     });
 
     it('should handle empty strings', () => {

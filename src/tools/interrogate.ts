@@ -31,11 +31,16 @@ The Socratic engine analyzes the epic and generates clarifying questions to:
 - Uncover technical decisions needing input
 - Assess risks
 
-V2 Features (when API key is configured):
-- LLM-powered semantic question generation
+**No API key required**: Elenchus uses template-based questions and delegates
+LLM work to the calling agent (Claude, etc.). The calling LLM provides the
+intelligence - Elenchus provides the structure and workflow.
+
+Features:
+- Structured question generation across key areas
 - Context-aware follow-up questions
-- Answer validation with vagueness detection
+- Vagueness detection for iterative refinement
 - Challenge mode for devil's advocate questions
+- Progress tracking with clarity and completeness scores
 
 Returns prioritized questions. Use elenchus_answer to provide responses.`,
 
@@ -328,12 +333,12 @@ function getBlockers(session: InterrogationSession): string[] {
   return blockers;
 }
 
-function getRecommendations(session: InterrogationSession, useLLM: boolean): string[] {
+function getRecommendations(session: InterrogationSession, _useLLM: boolean): string[] {
   const recommendations: string[] = [];
 
-  if (!useLLM) {
-    recommendations.push('Set ANTHROPIC_API_KEY for LLM-powered question generation');
-  }
+  // Note: Elenchus uses template-based questions by design.
+  // When called via MCP, the calling LLM (Claude, etc.) provides the intelligence.
+  // No separate API key is needed - Elenchus delegates LLM work to the caller.
 
   if (session.clarityScore < 50) {
     recommendations.push('Answer more questions to improve clarity');

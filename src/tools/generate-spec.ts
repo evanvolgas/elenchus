@@ -7,6 +7,7 @@ import {
   type Phase,
   type Checkpoint,
   type AcceptanceCriterion,
+  type Task,
   GenerateSpecInputSchema,
 } from '../types/index.js';
 import * as yaml from 'yaml';
@@ -343,27 +344,532 @@ function extractConstraints(
   return constraints;
 }
 
+/**
+ * Extract technical decisions from interrogation answers.
+ * This parses answers to find concrete technical choices like:
+ * - Framework/library choices (FastAPI, PostgreSQL, etc.)
+ * - API endpoint definitions
+ * - Database schema/models
+ * - Algorithm specifications
+ * - Architecture decisions
+ */
+interface TechnicalDecisions {
+  framework?: string;
+  language?: string;
+  database?: string;
+  apiEndpoints: Array<{ method: string; path: string; description: string }>;
+  dataModels: Array<{ name: string; fields: string[] }>;
+  algorithms: Array<{ name: string; description: string }>;
+  integrations: string[];
+  architecturePattern?: string;
+  rawTechnicalAnswers: Array<{ question: string; answer: string }>;
+}
+
+/**
+ * Parse API endpoints from an answer string.
+ * Looks for patterns like "POST /v1/baselines", "GET /api/users", etc.
+ */
+function parseApiEndpoints(text: string): Array<{ method: string; path: string; description: string }> {
+  const endpoints: Array<{ method: string; path: string; description: string }> = [];
+
+  // Match HTTP method + path patterns
+  const methodPathRegex = /\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+([\/\w\-\{\}:]+)/gi;
+  let match;
+
+  while ((match = methodPathRegex.exec(text)) !== null) {
+    const method = match[1]?.toUpperCase() ?? '';
+    const path = match[2] ?? '';
+    // Try to extract description from surrounding context
+    const contextStart = Math.max(0, match.index - 50);
+    const contextEnd = Math.min(text.length, match.index + match[0].length + 100);
+    const context = text.slice(contextStart, contextEnd);
+
+    // Look for description after the endpoint (often after a colon or dash)
+    const descMatch = context.match(new RegExp(`${path}[:\\-\\s]+([^\\n]+)`, 'i'));
+    const description = descMatch?.[1]?.trim().slice(0, 100) || `${method} endpoint`;
+
+    endpoints.push({ method, path, description });
+  }
+
+  return endpoints;
+}
+
+/**
+ * Parse data model definitions from an answer string.
+ * Looks for table names, field definitions, schema descriptions.
+ */
+function parseDataModels(text: string): Array<{ name: string; fields: string[] }> {
+  const models: Array<{ name: string; fields: string[] }> = [];
+
+  // Look for table/model definitions with fields
+  // Patterns: "baselines table:", "User model:", "CREATE TABLE xyz"
+  const modelPatterns = [
+    /(?:table|model|entity|schema|type)\s*[:\s]+([A-Z][a-zA-Z_]+)/gi,
+    /CREATE\s+TABLE\s+(\w+)/gi,
+    /interface\s+(\w+)/gi,
+    /class\s+(\w+)/gi,
+  ];
+
+  const foundModels = new Set<string>();
+
+  for (const pattern of modelPatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const modelName = match[1];
+      if (modelName && !foundModels.has(modelName.toLowerCase())) {
+        foundModels.add(modelName.toLowerCase());
+
+        // Try to extract fields for this model
+        const modelContext = text.slice(match.index, match.index + 500);
+        const fields = extractFieldsFromContext(modelContext);
+
+        models.push({
+          name: modelName,
+          fields: fields.length > 0 ? fields : ['(fields to be determined)'],
+        });
+      }
+    }
+  }
+
+  return models;
+}
+
+/**
+ * Extract field names from a model context.
+ */
+function extractFieldsFromContext(context: string): string[] {
+  const fields: string[] = [];
+
+  // Look for field patterns: "field_name: type", "field_name (type)", "- field_name"
+  const fieldPatterns = [
+    /[-•]\s*(\w+)\s*[:(]/g,
+    /(\w+)\s*:\s*(string|number|int|text|varchar|boolean|uuid|timestamp|date|json)/gi,
+    /(\w+)\s+(?:INT|VARCHAR|TEXT|BOOLEAN|UUID|TIMESTAMP|DATE|SERIAL|JSONB?)/gi,
+  ];
+
+  for (const pattern of fieldPatterns) {
+    let match;
+    while ((match = pattern.exec(context)) !== null) {
+      const field = match[1];
+      if (field && field.length > 1 && field.length < 50) {
+        fields.push(field);
+      }
+    }
+  }
+
+  // Dedupe
+  return [...new Set(fields)].slice(0, 10);
+}
+
+/**
+ * Extract framework/technology choices from text.
+ */
+function extractTechChoices(text: string): { framework?: string; language?: string; database?: string } {
+  const result: { framework?: string; language?: string; database?: string } = {};
+
+  // Frameworks (case-insensitive patterns)
+  const frameworks = [
+    { pattern: /\b(fastapi|fast\s*api)\b/i, name: 'FastAPI' },
+    { pattern: /\b(express\.?js?|express)\b/i, name: 'Express.js' },
+    { pattern: /\b(next\.?js?|nextjs)\b/i, name: 'Next.js' },
+    { pattern: /\b(django)\b/i, name: 'Django' },
+    { pattern: /\b(flask)\b/i, name: 'Flask' },
+    { pattern: /\b(spring\s*boot|spring)\b/i, name: 'Spring Boot' },
+    { pattern: /\b(rails|ruby\s*on\s*rails)\b/i, name: 'Ruby on Rails' },
+    { pattern: /\b(nest\.?js?|nestjs)\b/i, name: 'NestJS' },
+    { pattern: /\b(gin)\b/i, name: 'Gin' },
+    { pattern: /\b(echo)\b/i, name: 'Echo' },
+    { pattern: /\b(fiber)\b/i, name: 'Fiber' },
+    { pattern: /\b(actix)\b/i, name: 'Actix' },
+    { pattern: /\b(rocket)\b/i, name: 'Rocket' },
+  ];
+
+  for (const fw of frameworks) {
+    if (fw.pattern.test(text)) {
+      result.framework = fw.name;
+      break;
+    }
+  }
+
+  // Languages
+  const languages = [
+    { pattern: /\b(python|py)\b/i, name: 'Python' },
+    { pattern: /\b(typescript|ts)\b/i, name: 'TypeScript' },
+    { pattern: /\b(javascript|js)\b/i, name: 'JavaScript' },
+    { pattern: /\b(golang|go\s+lang|\bgo\b)\b/i, name: 'Go' },
+    { pattern: /\b(rust)\b/i, name: 'Rust' },
+    { pattern: /\b(java)\b/i, name: 'Java' },
+    { pattern: /\b(kotlin)\b/i, name: 'Kotlin' },
+    { pattern: /\b(ruby)\b/i, name: 'Ruby' },
+    { pattern: /\b(c#|csharp|\.net)\b/i, name: 'C#/.NET' },
+  ];
+
+  for (const lang of languages) {
+    if (lang.pattern.test(text)) {
+      result.language = lang.name;
+      break;
+    }
+  }
+
+  // Databases
+  const databases = [
+    { pattern: /\b(postgres(?:ql)?|pg)\b/i, name: 'PostgreSQL' },
+    { pattern: /\b(mysql)\b/i, name: 'MySQL' },
+    { pattern: /\b(sqlite)\b/i, name: 'SQLite' },
+    { pattern: /\b(mongodb|mongo)\b/i, name: 'MongoDB' },
+    { pattern: /\b(redis)\b/i, name: 'Redis' },
+    { pattern: /\b(dynamodb|dynamo)\b/i, name: 'DynamoDB' },
+    { pattern: /\b(cassandra)\b/i, name: 'Cassandra' },
+    { pattern: /\b(elasticsearch|elastic)\b/i, name: 'Elasticsearch' },
+    { pattern: /\b(supabase)\b/i, name: 'Supabase' },
+  ];
+
+  for (const db of databases) {
+    if (db.pattern.test(text)) {
+      result.database = db.name;
+      break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Extract algorithm descriptions from text.
+ */
+function extractAlgorithms(text: string): Array<{ name: string; description: string }> {
+  const algorithms: Array<{ name: string; description: string }> = [];
+
+  // Look for algorithm mentions with context
+  const algorithmPatterns = [
+    /(?:algorithm|method|approach|technique|strategy)[:\s]+([^\n.]+)/gi,
+    /(?:using|implement|apply)\s+(?:a\s+)?(\w+(?:\s+\w+){0,3})\s+(?:algorithm|method|approach)/gi,
+    /scoring\s+(?:system|method|algorithm)[:\s]*([^\n]+)/gi,
+    /detection\s+(?:method|algorithm|approach)[:\s]*([^\n]+)/gi,
+  ];
+
+  for (const pattern of algorithmPatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const desc = match[1]?.trim();
+      if (desc && desc.length > 5 && desc.length < 200) {
+        algorithms.push({
+          name: `Algorithm: ${desc.slice(0, 50)}`,
+          description: desc,
+        });
+      }
+    }
+  }
+
+  return algorithms.slice(0, 5); // Limit to prevent bloat
+}
+
+/**
+ * Extract all technical decisions from session answers.
+ */
+function extractTechnicalDecisions(
+  session: ReturnType<Storage['getSession']> & {},
+  questions: Array<{ id: string; question: string; type: string }>
+): TechnicalDecisions {
+  const decisions: TechnicalDecisions = {
+    apiEndpoints: [],
+    dataModels: [],
+    algorithms: [],
+    integrations: [],
+    rawTechnicalAnswers: [],
+  };
+
+  // Build a map of question IDs to questions for context
+  const questionMap = new Map<string, { question: string; type: string }>();
+  for (const q of questions) {
+    questionMap.set(q.id, { question: q.question, type: q.type });
+  }
+
+  // Process each answer, prioritizing technical answers
+  for (const answer of session.answers) {
+    const questionInfo = questionMap.get(answer.questionId);
+    const answerText = answer.answer;
+
+    // Always capture raw technical answers for transparency
+    if (questionInfo?.type === 'technical' ||
+        questionInfo?.question.toLowerCase().includes('technical') ||
+        questionInfo?.question.toLowerCase().includes('how') ||
+        questionInfo?.question.toLowerCase().includes('implement')) {
+      decisions.rawTechnicalAnswers.push({
+        question: questionInfo?.question ?? answer.questionId,
+        answer: answerText,
+      });
+    }
+
+    // Extract tech choices from all answers
+    const techChoices = extractTechChoices(answerText);
+    if (techChoices.framework && !decisions.framework) {
+      decisions.framework = techChoices.framework;
+    }
+    if (techChoices.language && !decisions.language) {
+      decisions.language = techChoices.language;
+    }
+    if (techChoices.database && !decisions.database) {
+      decisions.database = techChoices.database;
+    }
+
+    // Extract API endpoints
+    const endpoints = parseApiEndpoints(answerText);
+    decisions.apiEndpoints.push(...endpoints);
+
+    // Extract data models
+    const models = parseDataModels(answerText);
+    decisions.dataModels.push(...models);
+
+    // Extract algorithms
+    const algorithms = extractAlgorithms(answerText);
+    decisions.algorithms.push(...algorithms);
+
+    // Look for integration mentions
+    const integrationPatterns = [
+      /integrate\s+(?:with\s+)?(\w+(?:\s+\w+)?)/gi,
+      /(?:use|connect\s+to|call)\s+(?:the\s+)?(\w+)\s+(?:api|service)/gi,
+    ];
+
+    for (const pattern of integrationPatterns) {
+      let match;
+      while ((match = pattern.exec(answerText)) !== null) {
+        const integration = match[1];
+        if (integration && !decisions.integrations.includes(integration)) {
+          decisions.integrations.push(integration);
+        }
+      }
+    }
+
+    // Look for architecture patterns
+    const archPatterns = [
+      { pattern: /\b(microservices?)\b/i, name: 'Microservices' },
+      { pattern: /\b(monolith(?:ic)?)\b/i, name: 'Monolithic' },
+      { pattern: /\b(serverless)\b/i, name: 'Serverless' },
+      { pattern: /\b(event[- ]?driven)\b/i, name: 'Event-Driven' },
+      { pattern: /\b(cqrs)\b/i, name: 'CQRS' },
+      { pattern: /\b(hexagonal|ports\s+and\s+adapters)\b/i, name: 'Hexagonal' },
+      { pattern: /\b(clean\s+architecture)\b/i, name: 'Clean Architecture' },
+    ];
+
+    for (const arch of archPatterns) {
+      if (arch.pattern.test(answerText) && !decisions.architecturePattern) {
+        decisions.architecturePattern = arch.name;
+        break;
+      }
+    }
+  }
+
+  // Deduplicate
+  decisions.apiEndpoints = dedupeEndpoints(decisions.apiEndpoints);
+  decisions.dataModels = dedupeModels(decisions.dataModels);
+  decisions.algorithms = decisions.algorithms.slice(0, 5);
+  decisions.integrations = [...new Set(decisions.integrations)].slice(0, 10);
+
+  return decisions;
+}
+
+function dedupeEndpoints(endpoints: Array<{ method: string; path: string; description: string }>): Array<{ method: string; path: string; description: string }> {
+  const seen = new Set<string>();
+  return endpoints.filter(ep => {
+    const key = `${ep.method}:${ep.path}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeModels(models: Array<{ name: string; fields: string[] }>): Array<{ name: string; fields: string[] }> {
+  const seen = new Set<string>();
+  return models.filter(m => {
+    const key = m.name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Generate concrete implementation tasks from technical decisions.
+ */
+function generateImplementationTasks(
+  decisions: TechnicalDecisions,
+  epic: NonNullable<ReturnType<Storage['getEpic']>>,
+  taskIdPrefix: string
+): Task[] {
+  const tasks: Task[] = [];
+  let taskIndex = 1;
+
+  // If we have specific API endpoints, create tasks for each major endpoint group
+  if (decisions.apiEndpoints.length > 0) {
+    // Group endpoints by resource (path prefix)
+    const endpointGroups = groupEndpointsByResource(decisions.apiEndpoints);
+
+    for (const [resource, endpoints] of Object.entries(endpointGroups)) {
+      const endpointDescriptions = endpoints
+        .map(ep => `${ep.method} ${ep.path}`)
+        .slice(0, 5)
+        .join(', ');
+
+      tasks.push({
+        id: `${taskIdPrefix}-${taskIndex++}`,
+        type: 'implement',
+        description: `Implement ${resource} API endpoints: ${endpointDescriptions}`,
+        agentType: 'coder',
+        agentModel: 'sonnet',
+        files: [],
+        acceptanceCriteria: endpoints.map(ep => `${ep.method} ${ep.path} returns correct response`),
+        constraints: decisions.framework ? [`Use ${decisions.framework}`] : [],
+        dependsOn: ['task-design-architecture'],
+        estimatedTokens: 15000,
+        estimatedMinutes: 15,
+      });
+    }
+  }
+
+  // If we have data models, create database setup task
+  if (decisions.dataModels.length > 0 && decisions.database) {
+    const modelNames = decisions.dataModels.map(m => m.name).join(', ');
+    const modelDetails = decisions.dataModels
+      .map(m => `${m.name}(${m.fields.slice(0, 5).join(', ')})`)
+      .join('; ');
+
+    tasks.push({
+      id: `${taskIdPrefix}-${taskIndex++}`,
+      type: 'implement',
+      description: `Set up ${decisions.database} database schema with models: ${modelDetails}`,
+      agentType: 'coder',
+      agentModel: 'sonnet',
+      files: [],
+      acceptanceCriteria: [
+        `Database schema created for: ${modelNames}`,
+        'Migrations/setup scripts work correctly',
+        'Indexes defined for query patterns',
+      ],
+      constraints: [`Use ${decisions.database}`],
+      dependsOn: ['task-design-architecture'],
+      estimatedTokens: 10000,
+      estimatedMinutes: 10,
+    });
+  }
+
+  // If we have algorithms, create specific tasks for each
+  if (decisions.algorithms.length > 0) {
+    for (const algo of decisions.algorithms) {
+      tasks.push({
+        id: `${taskIdPrefix}-${taskIndex++}`,
+        type: 'implement',
+        description: `Implement ${algo.name}: ${algo.description}`,
+        agentType: 'coder',
+        agentModel: 'sonnet',
+        files: [],
+        acceptanceCriteria: [
+          `${algo.name} implemented correctly`,
+          'Unit tests cover algorithm logic',
+          'Edge cases handled',
+        ],
+        constraints: [],
+        dependsOn: ['task-design-architecture'],
+        estimatedTokens: 12000,
+        estimatedMinutes: 12,
+      });
+    }
+  }
+
+  // If no specific technical details were extracted, fall back to acceptance criteria
+  if (tasks.length === 0) {
+    // Use epic acceptance criteria to generate more specific tasks
+    const criteriaChunks = chunkArray(epic.extractedAcceptanceCriteria, 3);
+
+    for (let i = 0; i < criteriaChunks.length && i < 3; i++) {
+      const criteria = criteriaChunks[i];
+      if (!criteria || criteria.length === 0) continue;
+
+      tasks.push({
+        id: `${taskIdPrefix}-${taskIndex++}`,
+        type: 'implement',
+        description: `Implement: ${criteria.slice(0, 2).join('; ')}`,
+        agentType: 'coder',
+        agentModel: 'sonnet',
+        files: [],
+        acceptanceCriteria: criteria,
+        constraints: epic.extractedConstraints,
+        dependsOn: ['task-design-architecture'],
+        estimatedTokens: 20000,
+        estimatedMinutes: 15,
+      });
+    }
+  }
+
+  return tasks;
+}
+
+function groupEndpointsByResource(
+  endpoints: Array<{ method: string; path: string; description: string }>
+): Record<string, Array<{ method: string; path: string; description: string }>> {
+  const groups: Record<string, Array<{ method: string; path: string; description: string }>> = {};
+
+  for (const ep of endpoints) {
+    // Extract resource from path (e.g., /v1/baselines -> baselines)
+    const parts = ep.path.split('/').filter(p => p && !p.startsWith('v') && !p.startsWith('{'));
+    const resource = parts[0] || 'core';
+
+    if (!groups[resource]) {
+      groups[resource] = [];
+    }
+    groups[resource].push(ep);
+  }
+
+  return groups;
+}
+
+function chunkArray<T>(array: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
 function buildPhases(
   epic: NonNullable<ReturnType<Storage['getEpic']>>,
-  _session: ReturnType<Storage['getSession']> & {},
+  session: ReturnType<Storage['getSession']> & {},
   context: ReturnType<Storage['getContextForPath']>
 ): Phase[] {
   const phases: Phase[] = [];
+
+  // Extract technical decisions from interrogation answers
+  const decisions = extractTechnicalDecisions(session, session.questions);
+
+  // Build tech stack description for research phase
+  const techStack: string[] = [];
+  if (decisions.framework) techStack.push(decisions.framework);
+  if (decisions.language) techStack.push(decisions.language);
+  if (decisions.database) techStack.push(decisions.database);
+  const techStackDesc = techStack.length > 0
+    ? ` using ${techStack.join(', ')}`
+    : '';
 
   // Phase 1: Research
   phases.push({
     id: 'phase-research',
     name: 'Research',
-    description: 'Analyze requirements and codebase patterns',
+    description: `Analyze requirements and codebase patterns${techStackDesc}`,
     tasks: [
       {
         id: 'task-research-requirements',
         type: 'research',
-        description: 'Analyze epic requirements and identify implementation approach',
+        description: decisions.rawTechnicalAnswers.length > 0
+          ? `Analyze requirements: ${decisions.rawTechnicalAnswers[0]?.answer.slice(0, 100) ?? 'technical approach'}...`
+          : 'Analyze epic requirements and identify implementation approach',
         agentType: 'researcher',
         agentModel: 'haiku',
         files: [],
-        acceptanceCriteria: ['Requirements documented', 'Approach identified'],
+        acceptanceCriteria: [
+          'Requirements documented',
+          'Technical approach identified',
+          ...(techStack.length > 0 ? [`Tech stack validated: ${techStack.join(', ')}`] : []),
+        ],
         constraints: [],
         dependsOn: [],
         estimatedTokens: 10000,
@@ -390,21 +896,38 @@ function buildPhases(
     estimatedDurationMinutes: 15,
   });
 
-  // Phase 2: Architecture
+  // Phase 2: Architecture - include concrete technical decisions
+  const archDescription = decisions.architecturePattern
+    ? `Design ${decisions.architecturePattern} architecture`
+    : 'Design technical approach and component structure';
+
+  const archCriteria = [
+    'Architecture documented',
+    'Data flow defined',
+  ];
+  if (decisions.apiEndpoints.length > 0) {
+    archCriteria.push(`API contract defined (${decisions.apiEndpoints.length} endpoints)`);
+  }
+  if (decisions.dataModels.length > 0) {
+    archCriteria.push(`Data model designed (${decisions.dataModels.map(m => m.name).join(', ')})`);
+  }
+
   phases.push({
     id: 'phase-architecture',
     name: 'Architecture',
-    description: 'Design technical approach and component structure',
+    description: archDescription,
     tasks: [
       {
         id: 'task-design-architecture',
         type: 'design',
-        description: 'Design component structure and data flow',
+        description: decisions.apiEndpoints.length > 0
+          ? `Design API architecture: ${decisions.apiEndpoints.slice(0, 3).map(ep => `${ep.method} ${ep.path}`).join(', ')}${decisions.apiEndpoints.length > 3 ? '...' : ''}`
+          : 'Design component structure and data flow',
         agentType: 'system-architect',
         agentModel: 'sonnet',
         files: [],
-        acceptanceCriteria: ['Architecture documented', 'Data flow defined'],
-        constraints: [],
+        acceptanceCriteria: archCriteria,
+        constraints: techStack.length > 0 ? [`Tech stack: ${techStack.join(', ')}`] : [],
         dependsOn: ['task-research-requirements', 'task-research-codebase'],
         estimatedTokens: 20000,
         estimatedMinutes: 10,
@@ -417,49 +940,76 @@ function buildPhases(
     estimatedDurationMinutes: 10,
   });
 
-  // Phase 3: Implementation
+  // Phase 3: Implementation - generate concrete tasks from technical decisions
+  const implementationTasks = generateImplementationTasks(decisions, epic, 'task-implement');
+
+  // If no specific tasks generated, add a meaningful fallback
+  if (implementationTasks.length === 0) {
+    implementationTasks.push({
+      id: 'task-implement-core',
+      type: 'implement',
+      description: techStack.length > 0
+        ? `Implement core functionality with ${techStack.join(', ')}`
+        : `Implement: ${epic.extractedGoals[0] || 'core functionality'}`,
+      agentType: 'coder',
+      agentModel: 'sonnet',
+      files: [],
+      acceptanceCriteria: epic.extractedAcceptanceCriteria.slice(0, 5),
+      constraints: epic.extractedConstraints,
+      dependsOn: ['task-design-architecture'],
+      estimatedTokens: 50000,
+      estimatedMinutes: 30,
+    });
+  }
+
+  const implDescription = decisions.apiEndpoints.length > 0
+    ? `Build the ${decisions.framework || 'API'} implementation with ${decisions.apiEndpoints.length} endpoints`
+    : decisions.dataModels.length > 0
+    ? `Build the implementation with ${decisions.dataModels.length} data models`
+    : 'Build the POC';
+
   phases.push({
     id: 'phase-implementation',
     name: 'Implementation',
-    description: 'Build the POC',
-    tasks: [
-      {
-        id: 'task-implement-core',
-        type: 'implement',
-        description: 'Implement core functionality',
-        agentType: 'coder',
-        agentModel: 'sonnet',
-        files: [],
-        acceptanceCriteria: epic.extractedAcceptanceCriteria.slice(0, 3),
-        constraints: epic.extractedConstraints,
-        dependsOn: ['task-design-architecture'],
-        estimatedTokens: 50000,
-        estimatedMinutes: 30,
-      },
-    ],
-    parallel: false,
+    description: implDescription,
+    tasks: implementationTasks,
+    parallel: implementationTasks.length > 1, // Allow parallel if multiple tasks
     dependencies: ['phase-architecture'],
     checkpointAfter: true,
     checkpointReason: 'Review implementation before testing',
-    estimatedDurationMinutes: 30,
+    estimatedDurationMinutes: implementationTasks.reduce((sum, t) => sum + (t.estimatedMinutes || 15), 0),
   });
 
-  // Phase 4: Testing
+  // Phase 4: Testing - reference actual endpoints and models
+  const testDescription = decisions.apiEndpoints.length > 0
+    ? `Write tests for ${decisions.apiEndpoints.length} API endpoints`
+    : decisions.dataModels.length > 0
+    ? `Write tests for ${decisions.dataModels.map(m => m.name).join(', ')} models`
+    : 'Write unit and integration tests';
+
+  const testCriteria = ['Tests written', 'Coverage > 80%'];
+  if (decisions.apiEndpoints.length > 0) {
+    testCriteria.push(`All ${decisions.apiEndpoints.length} endpoints have request/response tests`);
+  }
+  if (decisions.algorithms.length > 0) {
+    testCriteria.push(`Algorithm edge cases covered: ${decisions.algorithms.map(a => a.name).join(', ')}`);
+  }
+
   phases.push({
     id: 'phase-testing',
     name: 'Testing',
-    description: 'Write and run tests',
+    description: testDescription,
     tasks: [
       {
         id: 'task-write-tests',
         type: 'test',
-        description: 'Write unit and integration tests',
+        description: testDescription,
         agentType: 'tester',
         agentModel: 'sonnet',
         files: [],
-        acceptanceCriteria: ['Tests written', 'Coverage > 80%'],
+        acceptanceCriteria: testCriteria,
         constraints: [],
-        dependsOn: ['task-implement-core'],
+        dependsOn: implementationTasks.map(t => t.id),
         estimatedTokens: 30000,
         estimatedMinutes: 20,
       },
@@ -479,11 +1029,17 @@ function buildPhases(
       {
         id: 'task-code-review',
         type: 'review',
-        description: 'Review code quality, security, and best practices',
+        description: decisions.framework
+          ? `Review ${decisions.framework} code quality, security, and best practices`
+          : 'Review code quality, security, and best practices',
         agentType: 'reviewer',
         agentModel: 'sonnet',
         files: [],
-        acceptanceCriteria: ['No critical issues', 'Best practices followed'],
+        acceptanceCriteria: [
+          'No critical issues',
+          'Best practices followed',
+          ...(decisions.database ? [`${decisions.database} queries optimized`] : []),
+        ],
         constraints: [],
         dependsOn: ['task-write-tests'],
         estimatedTokens: 15000,

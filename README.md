@@ -46,41 +46,31 @@ npm run build
 
 ## Setup
 
-### API Key Configuration
+### No API Key Required (MCP Usage)
 
-Elenchus uses Claude AI for LLM-powered question generation and answer validation. Configure your Anthropic API key using one of these methods (in order of precedence):
+**When using Elenchus via MCP (Claude Code, Cursor, etc.), no API key is needed.** The calling LLM (Claude, GPT, etc.) provides all the intelligence—Elenchus provides structure, workflow, and templates.
 
-#### Option 1: Environment Variable (Recommended for CI/CD)
+Elenchus uses:
+- **Template-based question generation** that covers all essential specification areas
+- **Structured workflows** that guide the interrogation process
+- **Technical decision extraction** that captures frameworks, APIs, databases, and algorithms from your answers
+
+The calling agent IS the LLM. Elenchus orchestrates, the caller thinks.
+
+### Optional: API Key for Standalone/CLI Usage
+
+If you're using Elenchus standalone (without a calling LLM), you can configure an Anthropic API key for internal LLM processing:
 
 ```bash
+# Environment variable
 export ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
-```
 
-#### Option 2: Configuration File (Recommended for Local Development)
-
-Copy the example config and add your key:
-
-```bash
+# Or config file
 cp elenchus.config.example.json elenchus.config.json
+# Edit elenchus.config.json to add your key
 ```
 
-Then edit `elenchus.config.json`:
-
-```json
-{
-  "anthropicApiKey": "sk-ant-api03-your-key-here"
-}
-```
-
-> **Security**: `elenchus.config.json` is automatically gitignored. Never commit API keys to version control.
-
-#### Option 3: .env File
-
-If you use a `.env` file for other services, Elenchus will read `ANTHROPIC_API_KEY` from it when no config file is present.
-
-#### Without an API Key
-
-Elenchus works without an API key using template-based interrogation. LLM-powered features (semantic question generation, answer validation, challenge mode) require a valid API key.
+> **Note**: This is only needed for standalone/CLI usage. MCP users should skip this.
 
 ### Claude Code
 
@@ -343,24 +333,25 @@ Generated specs include:
 - Cost estimates (by phase)
 - Duration estimates
 
-## Interrogation Engine V2 Features
+## Interrogation Engine Features
 
-With an Anthropic API key configured, Elenchus unlocks advanced LLM-powered features:
+### Template-Based Question Generation (No API Key Required)
+- **Comprehensive coverage**: Questions across scope, constraints, success criteria, technical decisions, and risks
+- **Tech stack awareness**: Detects frameworks, databases, and patterns from your answers
+- **Domain adaptation**: Question templates adapt to the type of project (API, frontend, data pipeline, etc.)
 
-### LLM-Powered Question Generation
-- **Context-aware questions**: Questions tailored to your epic's domain and codebase
-- **Semantic gap detection**: Identifies missing information based on content analysis
-- **Tech stack awareness**: Questions specific to detected technologies
-
-### Answer Validation
-- **Vagueness detection**: Flags answers containing "stuff", "things", "maybe", etc.
-- **Completeness checks**: Ensures answers fully address the question
-- **Contradiction detection**: Identifies conflicts between different answers
+### Technical Decision Extraction
+Elenchus extracts concrete technical details from your answers:
+- **API endpoints**: `GET /users`, `POST /auth/login`, etc.
+- **Data models**: Tables, fields, relationships
+- **Frameworks & languages**: Express, React, PostgreSQL, etc.
+- **Algorithms**: Search strategies, sorting, caching approaches
+- **Architecture patterns**: Microservices, monolith, serverless
 
 ### Multi-Round Progression
 - **Adaptive questioning**: Follow-up questions based on previous answers
 - **80% clarity escape**: Can proceed to spec generation when understanding is sufficient
-- **10-round maximum**: "Ralph Wiggum" termination prevents infinite loops
+- **10-round maximum**: Prevents infinite loops
 
 ### Challenge Mode (Opt-in)
 Enable with `challengeMode: true` in interrogation:

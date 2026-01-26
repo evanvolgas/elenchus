@@ -136,12 +136,12 @@ describe('delivery tool', () => {
           artifacts: [
             {
               type: 'code',
-              path: '/src/delivery.ts',
+              path: 'src/delivery.ts',
               description: 'Delivery implementation',
             },
             {
               type: 'test',
-              path: '/tests/delivery.test.ts',
+              path: 'tests/delivery.test.ts',
               description: 'Delivery tests',
             },
           ],
@@ -156,7 +156,7 @@ describe('delivery tool', () => {
       expect(result.delivery.artifacts).toHaveLength(2);
       expect(result.delivery.artifacts[0]).toEqual({
         type: 'code',
-        path: '/src/delivery.ts',
+        path: 'src/delivery.ts',
         description: 'Delivery implementation',
       });
       expect(result.delivery.knownLimitations).toEqual([]);
@@ -171,7 +171,7 @@ describe('delivery tool', () => {
           artifacts: [
             {
               type: 'code',
-              path: '/src/feature.ts',
+              path: 'src/feature.ts',
               description: 'Feature code',
             },
           ],
@@ -192,7 +192,7 @@ describe('delivery tool', () => {
           artifacts: [
             {
               type: 'code',
-              path: '/src/feature.ts',
+              path: 'src/feature.ts',
               description: 'Feature code',
             },
           ],
@@ -215,9 +215,9 @@ describe('delivery tool', () => {
         {
           specId: 'spec-456',
           artifacts: [
-            { type: 'code', path: '/src/a.ts', description: 'A' },
-            { type: 'code', path: '/src/b.ts', description: 'B' },
-            { type: 'test', path: '/tests/test.ts', description: 'Tests' },
+            { type: 'code', path: 'src/a.ts', description: 'A' },
+            { type: 'code', path: 'src/b.ts', description: 'B' },
+            { type: 'test', path: 'tests/test.ts', description: 'Tests' },
           ],
           notes: 'Implementation notes',
           knownLimitations: ['Limitation 1', 'Limitation 2'],
@@ -242,7 +242,7 @@ describe('delivery tool', () => {
           artifacts: [
             {
               type: 'code',
-              path: '/src/feature.ts',
+              path: 'src/feature.ts',
               description: 'Feature',
             },
           ],
@@ -272,7 +272,7 @@ describe('delivery tool', () => {
           artifacts: [
             {
               type: 'code',
-              path: '/src/feature.ts',
+              path: 'src/feature.ts',
               description: 'Feature',
             },
           ],
@@ -291,7 +291,7 @@ describe('delivery tool', () => {
           artifacts: [
             {
               type: 'code',
-              path: '/src/feature.ts',
+              path: 'src/feature.ts',
               description: 'Feature',
             },
           ],
@@ -317,7 +317,7 @@ describe('delivery tool', () => {
             artifacts: [
               {
                 type: 'code',
-                path: '/src/feature.ts',
+                path: 'src/feature.ts',
                 description: 'Feature',
               },
             ],
@@ -337,7 +337,7 @@ describe('delivery tool', () => {
             artifacts: [
               {
                 type: 'code',
-                path: '/src/feature.ts',
+                path: 'src/feature.ts',
                 description: 'Feature',
               },
             ],
@@ -355,7 +355,7 @@ describe('delivery tool', () => {
             artifacts: [
               {
                 type: 'invalid-type',
-                path: '/src/feature.ts',
+                path: 'src/feature.ts',
                 description: 'Feature',
               },
             ],
@@ -386,7 +386,7 @@ describe('delivery tool', () => {
             artifacts: [
               {
                 type,
-                path: `/artifacts/${type}.txt`,
+                path: `artifacts/${type}.txt`,
                 description: `${type} artifact`,
               },
             ],

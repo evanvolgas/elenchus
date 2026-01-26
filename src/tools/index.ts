@@ -1,6 +1,12 @@
 import type { Tool, TextContent } from '@modelcontextprotocol/sdk/types.js';
 import type { Storage } from '../storage/index.js';
 import { logger } from '../utils/logger.js';
+import {
+  classifyError,
+  createErrorResponse,
+  ElenchusError,
+  ErrorCode,
+} from '../utils/errors.js';
 
 import { ingestTool, handleIngest } from './ingest.js';
 import { analyzeTool, handleAnalyze } from './analyze.js';
@@ -14,25 +20,10 @@ import { checkpointTool, handleCheckpoint } from './checkpoint.js';
 import { deliveryTool, handleDelivery } from './delivery.js';
 
 /**
- * Error codes for programmatic error handling.
+ * Re-export error codes for backwards compatibility
+ * @deprecated Use ErrorCode from '../utils/errors.js' instead
  */
-export const ErrorCodes = {
-  UNKNOWN_TOOL: 'UNKNOWN_TOOL',
-  INVALID_ARGUMENTS: 'INVALID_ARGUMENTS',
-  VALIDATION_ERROR: 'VALIDATION_ERROR',
-  NOT_FOUND: 'NOT_FOUND',
-  INTERNAL_ERROR: 'INTERNAL_ERROR',
-} as const;
-
-/**
- * Structured error response for MCP tool calls.
- */
-interface ErrorResponse {
-  error: true;
-  code: keyof typeof ErrorCodes;
-  message: string;
-  details?: Record<string, unknown>;
-}
+export const ErrorCodes = ErrorCode;
 
 /**
  * Register all MCP tools
@@ -61,22 +52,6 @@ function validateArgs(args: unknown): args is Record<string, unknown> {
     typeof args === 'object' &&
     !Array.isArray(args)
   );
-}
-
-/**
- * Create a structured error response.
- */
-function createErrorResponse(
-  code: keyof typeof ErrorCodes,
-  message: string,
-  details?: Record<string, unknown>
-): ErrorResponse {
-  return {
-    error: true,
-    code,
-    message,
-    ...(details && { details }),
-  };
 }
 
 /**
@@ -123,16 +98,17 @@ export async function handleToolCall(
             isNull: args === null,
             isArray: Array.isArray(args),
           });
+          const invalidArgsError = new ElenchusError(
+            'Arguments must be a non-null object',
+            ErrorCode.INVALID_ARGUMENTS,
+            { details: { received: typeof args } }
+          );
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify(
-                  createErrorResponse(
-                    'INVALID_ARGUMENTS',
-                    'Arguments must be a non-null object',
-                    { received: typeof args, requestId }
-                  ),
+                  createErrorResponse(invalidArgsError, requestId),
                   null,
                   2
                 ),
@@ -205,26 +181,25 @@ export async function handleToolCall(
           ],
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
         const elapsedMs = logger.getElapsedMs();
 
-        // Determine error code based on error type/message
-        let code: keyof typeof ErrorCodes = 'INTERNAL_ERROR';
-        if (message.includes('not found') || message.includes('Not found')) {
-          code = 'NOT_FOUND';
-        } else if (error instanceof Error && error.name === 'ZodError') {
-          code = 'VALIDATION_ERROR';
-        }
+        // Classify the error to get appropriate code and structure
+        const classified = classifyError(error);
 
         // Log error with full context (requestId automatically included)
-        logger.error('Tool call failed', error, { code, elapsedMs });
+        logger.error('Tool call failed', error, {
+          code: classified.code,
+          httpStatus: classified.httpStatus,
+          isRetryable: classified.isRetryable,
+          elapsedMs,
+        });
 
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify(
-                createErrorResponse(code, message, { requestId }),
+                createErrorResponse(error, requestId),
                 null,
                 2
               ),

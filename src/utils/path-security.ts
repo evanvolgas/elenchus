@@ -186,9 +186,10 @@ export function sanitizeGlobPattern(input: string): string {
     return '';
   }
 
-  // Remove glob special characters: * ? [ ] { } ( ) ! + ? ^ $ | \ /
+  // Remove glob and shell special characters:
+  // * ? [ ] { } ( ) ! + ^ $ | \ / , ` - all potentially dangerous in globs/shells
   // Keep only alphanumeric, hyphens, underscores, and dots
-  return input.replace(/[*?[\]{}()!+^$|\\\/]/g, '').slice(0, 100);
+  return input.replace(/[*?[\]{}()!+^$|\\\/,`]/g, '').slice(0, 100);
 }
 
 /**

@@ -124,10 +124,17 @@ function detectPHPFrameworks(
 
   try {
     const content = readFileSync(composerJsonPath, 'utf-8');
-    const composer = JSON.parse(content) as {
+    let composer: {
       require?: Record<string, string>;
       'require-dev'?: Record<string, string>;
     };
+
+    try {
+      composer = JSON.parse(content) as typeof composer;
+    } catch {
+      // Malformed composer.json - return empty frameworks
+      return frameworks;
+    }
 
     const allDeps = {
       ...(composer.require ?? {}),
