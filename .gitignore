@@ -34,6 +34,9 @@ coverage/
 # Elenchus data directory
 .elenchus/
 
+# Elenchus config (contains API keys)
+elenchus.config.json
+
 # Claude Flow
 .claude-flow/
 .swarm/

@@ -46,6 +46,42 @@ npm run build
 
 ## Setup
 
+### API Key Configuration
+
+Elenchus uses Claude AI for LLM-powered question generation and answer validation. Configure your Anthropic API key using one of these methods (in order of precedence):
+
+#### Option 1: Environment Variable (Recommended for CI/CD)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
+```
+
+#### Option 2: Configuration File (Recommended for Local Development)
+
+Copy the example config and add your key:
+
+```bash
+cp elenchus.config.example.json elenchus.config.json
+```
+
+Then edit `elenchus.config.json`:
+
+```json
+{
+  "anthropicApiKey": "sk-ant-api03-your-key-here"
+}
+```
+
+> **Security**: `elenchus.config.json` is automatically gitignored. Never commit API keys to version control.
+
+#### Option 3: .env File
+
+If you use a `.env` file for other services, Elenchus will read `ANTHROPIC_API_KEY` from it when no config file is present.
+
+#### Without an API Key
+
+Elenchus works without an API key using template-based interrogation. LLM-powered features (semantic question generation, answer validation, challenge mode) require a valid API key.
+
 ### Claude Code
 
 ```bash
@@ -306,6 +342,31 @@ Generated specs include:
 - Token usage estimates
 - Cost estimates (by phase)
 - Duration estimates
+
+## Interrogation Engine V2 Features
+
+With an Anthropic API key configured, Elenchus unlocks advanced LLM-powered features:
+
+### LLM-Powered Question Generation
+- **Context-aware questions**: Questions tailored to your epic's domain and codebase
+- **Semantic gap detection**: Identifies missing information based on content analysis
+- **Tech stack awareness**: Questions specific to detected technologies
+
+### Answer Validation
+- **Vagueness detection**: Flags answers containing "stuff", "things", "maybe", etc.
+- **Completeness checks**: Ensures answers fully address the question
+- **Contradiction detection**: Identifies conflicts between different answers
+
+### Multi-Round Progression
+- **Adaptive questioning**: Follow-up questions based on previous answers
+- **80% clarity escape**: Can proceed to spec generation when understanding is sufficient
+- **10-round maximum**: "Ralph Wiggum" termination prevents infinite loops
+
+### Challenge Mode (Opt-in)
+Enable with `challengeMode: true` in interrogation:
+- **Devil's advocate questions**: "What if this fails at 10x scale?"
+- **Assumption surfacing**: "Are you assuming all users have accounts?"
+- **Alternative exploration**: "Have you considered GraphQL instead of REST?"
 
 ## Question Types
 

@@ -8,6 +8,14 @@ import {
   InterrogateInputSchema,
 } from '../types/index.js';
 import { generateId } from '../utils/id.js';
+import { logger } from '../utils/logger.js';
+import {
+  QuestionGenerator,
+  createQuestionGenerator,
+  LLMClient,
+  createClient,
+  ChallengeModeEngine,
+} from '../engines/index.js';
 
 /**
  * Tool definition for interrogation
@@ -22,6 +30,12 @@ The Socratic engine analyzes the epic and generates clarifying questions to:
 - Define success criteria
 - Uncover technical decisions needing input
 - Assess risks
+
+V2 Features (when API key is configured):
+- LLM-powered semantic question generation
+- Context-aware follow-up questions
+- Answer validation with vagueness detection
+- Challenge mode for devil's advocate questions
 
 Returns prioritized questions. Use elenchus_answer to provide responses.`,
 
@@ -41,13 +55,49 @@ Returns prioritized questions. Use elenchus_answer to provide responses.`,
         description: 'Force a new round of questions',
         default: false,
       },
+      forceReady: {
+        type: 'boolean',
+        description: 'Force spec-ready state if clarity >= 80% (escape hatch)',
+        default: false,
+      },
+      challengeMode: {
+        type: 'boolean',
+        description: 'Enable devil\'s advocate questions to surface assumptions and alternatives',
+        default: false,
+      },
     },
     required: ['epicId'],
   },
 };
 
+// Lazy-initialized singletons
+let llmClient: LLMClient | null = null;
+let questionGenerator: QuestionGenerator | null = null;
+let challengeEngine: ChallengeModeEngine | null = null;
+
+function getLLMClient(): LLMClient {
+  if (!llmClient) {
+    llmClient = createClient();
+  }
+  return llmClient;
+}
+
+function getQuestionGenerator(): QuestionGenerator {
+  if (!questionGenerator) {
+    questionGenerator = createQuestionGenerator();
+  }
+  return questionGenerator;
+}
+
+function getChallengeEngine(): ChallengeModeEngine {
+  if (!challengeEngine) {
+    challengeEngine = new ChallengeModeEngine();
+  }
+  return challengeEngine;
+}
+
 /**
- * Handle interrogation
+ * Handle interrogation with V2 engine integration
  */
 export async function handleInterrogate(
   args: Record<string, unknown>,
@@ -60,6 +110,16 @@ export async function handleInterrogate(
   if (!epic) {
     throw new Error(`Epic not found: ${input.epicId}`);
   }
+
+  // Check LLM availability
+  const client = getLLMClient();
+  const useLLM = client.isAvailable();
+
+  logger.info('Starting interrogation', {
+    epicId: input.epicId,
+    useLLM,
+    challengeMode: input.challengeMode ?? false,
+  });
 
   // Get or create session
   let session: InterrogationSession;
@@ -75,26 +135,88 @@ export async function handleInterrogate(
     if (existingSessions.length > 0 && !input.forceNewRound) {
       session = existingSessions[0]!;
     } else {
-      session = createNewSession(input.epicId);
+      session = createNewSession(input.epicId, input.config);
     }
   }
 
-  // Generate questions based on current state
-  const questions = generateQuestions(epic, session);
+  // Check if we should start a new round based on whether all current questions are answered
+  const currentAnsweredIds = new Set(session.answers.map(a => a.questionId));
+  const unansweredCount = session.questions.filter(q => !currentAnsweredIds.has(q.id)).length;
+  const shouldAdvanceRound = input.forceNewRound || (unansweredCount === 0 && session.questions.length > 0);
 
-  // Update session
-  session.questions = [...session.questions, ...questions.filter(q =>
-    !session.questions.some(existing => existing.id === q.id)
-  )];
+  if (shouldAdvanceRound && session.round < session.maxRounds) {
+    session.round += 1;
+    logger.debug('Starting new round', { round: session.round });
+  }
+
+  // Generate questions using V2 QuestionGenerator
+  const generator = getQuestionGenerator();
+  const generatedQuestions = await generator.generate(
+    {
+      epic,
+      previousAnswers: session.answers,
+      round: session.round,
+      maxRounds: session.maxRounds,
+      challengeMode: input.challengeMode ?? false,
+    },
+    useLLM
+  );
+
+  // Add challenge mode questions if enabled
+  let challengeQuestions: Question[] = [];
+  if (input.challengeMode && session.answers.length > 0) {
+    const engine = getChallengeEngine();
+    challengeQuestions = await engine.generateChallengeQuestions(
+      epic,
+      session.answers
+    );
+    logger.debug('Generated challenge questions', { count: challengeQuestions.length });
+  }
+
+  // Merge new questions (avoid duplicates)
+  const allNewQuestions = [...generatedQuestions, ...challengeQuestions];
+  const existingIds = new Set(session.questions.map(q => q.id));
+  const uniqueNewQuestions = allNewQuestions.filter(q => !existingIds.has(q.id));
+
+  session.questions = [...session.questions, ...uniqueNewQuestions];
   session.status = 'waiting';
   session.updatedAt = new Date().toISOString();
 
-  // Calculate scores
+  // Calculate scores using RoundController
   const { clarityScore, completenessScore } = calculateScores(session);
   session.clarityScore = clarityScore;
   session.completenessScore = completenessScore;
-  session.readyForSpec = clarityScore >= 70 && completenessScore >= 70;
+
+  // Check readiness with escape hatch support
+  const canEscape = input.forceReady && clarityScore >= (input.config?.escapeThreshold ?? 80);
+  session.readyForSpec = (clarityScore >= 70 && completenessScore >= 70) || canEscape;
   session.blockers = getBlockers(session);
+
+  // Generate round summary for V2 response
+  const answeredThisRound = session.answers.filter(a => {
+    const q = session.questions.find(q => q.id === a.questionId);
+    return q !== undefined;
+  }).length;
+
+  const roundSummary = {
+    round: session.round,
+    questionsAsked: session.questions.length,
+    questionsAnswered: answeredThisRound,
+    clarityDelta: 0, // Would need previous clarity to calculate
+    readyForSpec: session.readyForSpec,
+    canEscape,
+  };
+
+  // Check for max rounds warning
+  const warnings = [];
+  if (session.round >= session.maxRounds && !session.readyForSpec) {
+    warnings.push({
+      type: 'max-rounds-reached' as const,
+      message: `Maximum rounds (${session.maxRounds}) reached. Consider using forceReady if clarity is sufficient.`,
+      gaps: session.blockers,
+      severity: 'warning' as const,
+    });
+  }
 
   // Save session
   storage.saveSession(session);
@@ -103,15 +225,33 @@ export async function handleInterrogate(
   const answeredIds = new Set(session.answers.map(a => a.questionId));
   const nextQuestions = session.questions.filter(q => !answeredIds.has(q.id));
 
-  return {
+  const result: InterrogationResult = {
     session,
     nextQuestions,
     readyForSpec: session.readyForSpec,
-    recommendations: getRecommendations(session),
+    recommendations: getRecommendations(session, useLLM),
+    roundSummary,
   };
+
+  if (warnings.length > 0) {
+    result.warnings = warnings;
+  }
+
+  logger.info('Interrogation complete', {
+    epicId: input.epicId,
+    sessionId: session.id,
+    clarityScore: session.clarityScore,
+    questionsGenerated: uniqueNewQuestions.length,
+    usedLLM: useLLM,
+  });
+
+  return result;
 }
 
-function createNewSession(epicId: string): InterrogationSession {
+function createNewSession(
+  epicId: string,
+  config?: { maxRounds?: number; escapeThreshold?: number }
+): InterrogationSession {
   const id = generateId('session');
   const now = new Date().toISOString();
 
@@ -126,161 +266,10 @@ function createNewSession(epicId: string): InterrogationSession {
     readyForSpec: false,
     blockers: [],
     round: 1,
-    maxRounds: 3,
+    maxRounds: config?.maxRounds ?? 10, // V2 default: 10 rounds
     startedAt: now,
     updatedAt: now,
   };
-}
-
-function generateQuestions(
-  epic: ReturnType<Storage['getEpic']> & {},
-  session: InterrogationSession
-): Question[] {
-  const questions: Question[] = [];
-  const existingIds = new Set(session.questions.map(q => q.id));
-
-  // Check what's missing from the epic
-
-  // Scope questions
-  if (epic.extractedGoals.length === 0) {
-    const id = `q-scope-goals-${session.round}`;
-    if (!existingIds.has(id)) {
-      questions.push({
-        id,
-        type: 'scope',
-        priority: 'critical',
-        question: 'What are the primary goals of this epic? What problem does it solve?',
-        context: 'No explicit goals were found in the epic. Clear goals help focus the POC.',
-        suggestedAnswers: [
-          'Improve user experience for...',
-          'Reduce costs by...',
-          'Enable new capability for...',
-        ],
-        targetAudience: 'pm',
-      });
-    }
-  }
-
-  // Success criteria questions
-  if (epic.extractedAcceptanceCriteria.length === 0) {
-    const id = `q-success-criteria-${session.round}`;
-    if (!existingIds.has(id)) {
-      questions.push({
-        id,
-        type: 'success',
-        priority: 'critical',
-        question: 'How will we know the POC is successful? What are the acceptance criteria?',
-        context: 'No acceptance criteria found. These are essential for validating the POC.',
-        suggestedAnswers: [
-          'User can successfully...',
-          'System responds within...',
-          'All tests pass for...',
-        ],
-        targetAudience: 'both',
-      });
-    }
-  }
-
-  // Constraint questions
-  if (epic.extractedConstraints.length === 0) {
-    const id = `q-constraint-tech-${session.round}`;
-    if (!existingIds.has(id)) {
-      questions.push({
-        id,
-        type: 'constraint',
-        priority: 'important',
-        question: 'Are there any technical constraints or requirements? (tech stack, performance, security)',
-        context: 'No explicit constraints found. Understanding constraints prevents wasted effort.',
-        suggestedAnswers: [
-          'Must use existing tech stack',
-          'Must handle X requests per second',
-          'Must comply with GDPR/SOC2',
-        ],
-        targetAudience: 'dev',
-      });
-    }
-  }
-
-  // Scope boundary questions
-  const id1 = `q-scope-out-${session.round}`;
-  if (!existingIds.has(id1)) {
-    questions.push({
-      id: id1,
-      type: 'scope',
-      priority: 'important',
-      question: 'What is explicitly OUT of scope for this POC?',
-      context: 'Defining what NOT to build prevents scope creep and focuses effort.',
-      suggestedAnswers: [
-        'Mobile support (desktop only)',
-        'Full production hardening',
-        'Migration of existing data',
-      ],
-      targetAudience: 'pm',
-    });
-  }
-
-  // User persona questions
-  if (!epic.extractedStakeholders || epic.extractedStakeholders.length === 0) {
-    const id = `q-stakeholder-user-${session.round}`;
-    if (!existingIds.has(id)) {
-      questions.push({
-        id,
-        type: 'stakeholder',
-        priority: 'important',
-        question: 'Who is the primary user of this feature? What is their context?',
-        context: 'Understanding the user helps shape UX decisions.',
-        suggestedAnswers: [
-          'Internal team member (power user)',
-          'External customer (new user)',
-          'Admin/operator',
-        ],
-        targetAudience: 'pm',
-      });
-    }
-  }
-
-  // Timeline questions
-  const id2 = `q-timeline-${session.round}`;
-  if (!existingIds.has(id2)) {
-    questions.push({
-      id: id2,
-      type: 'timeline',
-      priority: 'nice-to-have',
-      question: 'What is the timeline expectation for this POC?',
-      context: 'Timeline affects scope and technical decisions.',
-      suggestedAnswers: [
-        '1-2 days (quick spike)',
-        '1 week (focused POC)',
-        '2 weeks (comprehensive POC)',
-      ],
-      inferredDefault: '1 week',
-      targetAudience: 'both',
-    });
-  }
-
-  // Risk questions
-  const id3 = `q-risk-${session.round}`;
-  if (!existingIds.has(id3)) {
-    questions.push({
-      id: id3,
-      type: 'risk',
-      priority: 'nice-to-have',
-      question: 'What could go wrong? What are the biggest risks or unknowns?',
-      context: 'Identifying risks early allows for mitigation.',
-      suggestedAnswers: [
-        'External API reliability',
-        'Performance at scale',
-        'User adoption',
-      ],
-      targetAudience: 'both',
-    });
-  }
-
-  // Sort by priority
-  const priorityOrder = { critical: 0, important: 1, 'nice-to-have': 2 };
-  questions.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
-
-  return questions;
 }
 
 function calculateScores(session: InterrogationSession): {
@@ -339,8 +328,12 @@ function getBlockers(session: InterrogationSession): string[] {
   return blockers;
 }
 
-function getRecommendations(session: InterrogationSession): string[] {
+function getRecommendations(session: InterrogationSession, useLLM: boolean): string[] {
   const recommendations: string[] = [];
+
+  if (!useLLM) {
+    recommendations.push('Set ANTHROPIC_API_KEY for LLM-powered question generation');
+  }
 
   if (session.clarityScore < 50) {
     recommendations.push('Answer more questions to improve clarity');
@@ -354,6 +347,10 @@ function getRecommendations(session: InterrogationSession): string[] {
 
   if (session.blockers.length > 0) {
     recommendations.push(`${session.blockers.length} blocking issue(s) need resolution`);
+  }
+
+  if (session.round >= session.maxRounds * 0.7) {
+    recommendations.push(`Approaching max rounds (${session.round}/${session.maxRounds}). Consider forceReady if clarity >= 80%`);
   }
 
   return recommendations;
