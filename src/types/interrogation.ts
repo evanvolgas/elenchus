@@ -49,6 +49,11 @@ export const QuestionSchema = z.object({
 
   // Targeting
   targetAudience: z.enum(['pm', 'dev', 'both']).default('both'),
+
+  // V2: Question provenance and confidence (optional for backward compat)
+  source: z.enum(['template', 'llm', 'follow-up', 'challenge']).optional(),
+  generatedFrom: z.string().optional(), // Answer ID that triggered this
+  confidence: z.number().min(0).max(1).optional(), // LLM confidence in question relevance
 });
 
 export type Question = z.infer<typeof QuestionSchema>;
@@ -121,6 +126,14 @@ export const InterrogateInputSchema = z.object({
   epicId: z.string(),
   sessionId: z.string().optional(), // Continue existing session
   forceNewRound: z.boolean().default(false), // Force a new round of questions
+
+  // V2: Enhanced control options
+  forceReady: z.boolean().default(false), // Escape hatch (requires 80%+ clarity)
+  challengeMode: z.boolean().default(false), // Enable devil's advocate
+  config: z.object({
+    maxRounds: z.number().min(1).max(20).default(10),
+    escapeThreshold: z.number().min(0).max(100).default(80),
+  }).optional(),
 });
 
 export type InterrogateInput = z.infer<typeof InterrogateInputSchema>;
@@ -141,6 +154,71 @@ export const AnswerInputSchema = z.object({
 export type AnswerInput = z.infer<typeof AnswerInputSchema>;
 
 /**
+ * V2: Validation issue types
+ */
+export const ValidationIssueSchema = z.object({
+  type: z.enum(['vague', 'incomplete', 'incoherent', 'contradiction']),
+  description: z.string(),
+  severity: z.enum(['low', 'medium', 'high']),
+  relatedAnswerId: z.string().optional(),
+});
+
+export type ValidationIssue = z.infer<typeof ValidationIssueSchema>;
+
+/**
+ * V2: Answer validation results
+ */
+export const AnswerValidationSchema = z.object({
+  answerId: z.string(),
+  isVague: z.boolean(),
+  isComplete: z.boolean(),
+  isCoherent: z.boolean(),
+  vaguenessScore: z.number().min(0).max(1),
+  issues: z.array(ValidationIssueSchema),
+  suggestedFollowUp: z.string().optional(),
+});
+
+export type AnswerValidation = z.infer<typeof AnswerValidationSchema>;
+
+/**
+ * V2: Detected contradictions between answers
+ */
+export const ContradictionSchema = z.object({
+  answerId1: z.string(),
+  answerId2: z.string(),
+  description: z.string(),
+  severity: z.enum(['potential', 'likely', 'definite']),
+});
+
+export type Contradiction = z.infer<typeof ContradictionSchema>;
+
+/**
+ * V2: Interrogation warnings
+ */
+export const InterrogationWarningSchema = z.object({
+  type: z.enum(['incomplete-clarity', 'max-rounds-reached']),
+  message: z.string(),
+  gaps: z.array(z.string()),
+  severity: z.enum(['info', 'warning', 'error']),
+});
+
+export type InterrogationWarning = z.infer<typeof InterrogationWarningSchema>;
+
+/**
+ * V2: Round summary metrics
+ */
+export const RoundSummarySchema = z.object({
+  round: z.number(),
+  questionsAsked: z.number(),
+  questionsAnswered: z.number(),
+  clarityDelta: z.number(),
+  readyForSpec: z.boolean(),
+  canEscape: z.boolean(),
+});
+
+export type RoundSummary = z.infer<typeof RoundSummarySchema>;
+
+/**
  * Result of interrogation
  */
 export interface InterrogationResult {
@@ -148,4 +226,10 @@ export interface InterrogationResult {
   nextQuestions: Question[];
   readyForSpec: boolean;
   recommendations: string[];
+
+  // V2: Enhanced validation and tracking
+  validationResults?: AnswerValidation[];
+  contradictions?: Contradiction[];
+  roundSummary?: RoundSummary;
+  warnings?: InterrogationWarning[];
 }

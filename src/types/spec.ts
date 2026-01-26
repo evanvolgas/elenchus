@@ -238,6 +238,22 @@ export const SpecificationSchema = z.object({
   readinessScore: z.number().min(0).max(100),
   readinessIssues: z.array(z.string()),
 
+  // V2: Known ambiguities and interrogation metrics
+  knownAmbiguities: z.array(z.object({
+    area: z.string(),
+    description: z.string(),
+    impact: z.enum(['low', 'medium', 'high']),
+    recommendation: z.string(),
+  })).optional(),
+
+  interrogationMetrics: z.object({
+    rounds: z.number(),
+    questionsAsked: z.number(),
+    questionsAnswered: z.number(),
+    finalClarity: z.number(),
+    challengeModeUsed: z.boolean(),
+  }).optional(),
+
   // Timestamps
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
