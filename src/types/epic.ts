@@ -96,4 +96,8 @@ export interface IngestResult {
   epic: Epic;
   warnings: string[];
   extractionConfidence: number; // 0-100
+
+  // Smart interrogation: signal detection prompt for Claude to run
+  signalDetectionPrompt: string;
+  nextStep: string;
 }

@@ -1,24 +1,19 @@
 # Elenchus
 
-An MCP server that transforms vague human intent into executable agent prompts through Socratic questioning.
+An MCP server that builds better specs through Socratic interrogation.
 
-> **Elenchus** (ἔλεγχος): The Socratic method of eliciting truth by question and answer.
+> **Elenchus** (ἔλεγχος): The Socratic method of exposing contradictions through systematic questioning.
 
 ## What It Does
 
-Elenchus sits between human intent and agent execution. You give it a vague epic like "build user authentication" and it:
+Elenchus implements **true Socratic elenchus** - not just Q&A tracking, but **contradiction detection and forced resolution**.
 
-1. **Interrogates** - Asks targeted questions to surface scope, constraints, success criteria, and risks
-2. **Tracks coverage** - Ensures all critical areas are addressed before proceeding
-3. **Compiles** - Transforms Q&A into executable agent prompts with codebase context
+1. **Extracts premises** - From each answer, extract the logical commitments
+2. **Detects contradictions** - Check if accumulated premises conflict
+3. **Forces aporia** - Cannot generate spec until contradictions are resolved
+4. **Gates spec generation** - Blocks until all required areas covered AND no unresolved contradictions
 
-The output isn't a document for humans to read. It's a structured prompt that agents execute directly.
-
-## What It Doesn't Do
-
-- **Execute code** - Elenchus generates prompts, not code. Pass the output to Claude Flow, Task tool, or another orchestrator.
-- **Replace thinking** - The calling LLM (Claude, GPT, etc.) provides the intelligence. Elenchus provides structure and state management.
-- **Generate specs for humans** - The output is designed for agent consumption, not human review.
+This addresses the [41.77% of agent failures](https://www.augmentcode.com/guides/why-multi-agent-llm-systems-fail-and-how-to-fix-them) caused by specification problems.
 
 ## Installation
 
@@ -35,158 +30,143 @@ npm run build
 claude mcp add elenchus -- node /path/to/elenchus/dist/index.js
 ```
 
-### Cursor
-
-Add to `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "elenchus": {
-      "command": "node",
-      "args": ["/path/to/elenchus/dist/index.js"]
-    }
-  }
-}
-```
-
 ## Quick Start
 
-### 1. Ingest an Epic
+### 1. Start Interrogation
 
 ```
-Use elenchus_ingest with this content:
-
-"Build a REST API for a book library. Users can search books,
-check them out, and return them. Librarians can add/remove books."
+elenchus_start({
+  "source": "text",
+  "content": "Build a REST API for a book library. Users can search and checkout books."
+})
 ```
 
-### 2. Start Interrogation
+### 2. Submit Q&A with Premises
+
+The key difference: **extract premises** from each answer.
 
 ```
-Use elenchus_interrogate with the epic ID
+elenchus_qa({
+  "sessionId": "session-xxx",
+  "qa": [
+    {
+      "area": "scope",
+      "question": "Who can checkout books?",
+      "answer": "All users can checkout any book",
+      "score": 4,
+      "premises": [
+        { "statement": "All users have checkout access", "type": "capability" },
+        { "statement": "No book restrictions exist", "type": "assumption" }
+      ]
+    },
+    {
+      "area": "constraint",
+      "question": "Are there any restrictions?",
+      "answer": "Rare books can only be accessed by researchers",
+      "score": 4,
+      "premises": [
+        { "statement": "Rare books have access restrictions", "type": "constraint" },
+        { "statement": "Researchers have special permissions", "type": "capability" }
+      ]
+    }
+  ]
+})
 ```
 
-The tool returns the epic and current coverage state. The calling LLM reads the epic and asks the user clarifying questions.
+### 3. Detect Contradictions
 
-### 3. Submit Answers
-
-```
-Use elenchus_answer with the session ID and answers:
-
-- type: scope, question: "What types of users?", answer: "Patrons and librarians"
-- type: success, question: "How measure success?", answer: "Books can be searched in <200ms"
-- type: constraint, question: "Tech stack?", answer: "Express, TypeScript, SQLite"
-- type: risk, question: "What could fail?", answer: "Concurrent checkout conflicts"
-```
-
-Repeat until clarity score reaches 80%+.
-
-### 4. Generate Spec Data
+The response includes a `contradictionCheckPrompt` for you to analyze premises.
+If you find conflicts, report them:
 
 ```
-Use elenchus_generate_spec with the session ID
+elenchus_qa({
+  "sessionId": "session-xxx",
+  "qa": [...],
+  "contradictions": [
+    {
+      "premiseIds": ["prem-1", "prem-3"],
+      "description": "All users can checkout any book conflicts with rare book restrictions",
+      "severity": "critical"
+    }
+  ]
+})
 ```
 
-Returns organized Q&A for the calling LLM to synthesize into a specification.
+### 4. Resolve Contradictions (Aporia)
 
-### 5. Compile to Agent Prompts
+When contradictions exist, `readyForSpec` is `false`. You get a `challengeQuestion`:
+
+> "You said 'All users have checkout access' AND 'Rare books have access restrictions'. These cannot both be true. Which is ESSENTIAL?"
+
+Resolve by submitting the resolution:
 
 ```
-Use elenchus_compile with the session ID
+elenchus_qa({
+  "sessionId": "session-xxx",
+  "qa": [
+    {
+      "area": "scope",
+      "question": "Given the conflict, which takes priority?",
+      "answer": "Rare books require researcher access. Regular users can checkout non-rare books only.",
+      "score": 5,
+      "premises": [
+        { "statement": "Non-rare books available to all users", "type": "capability" },
+        { "statement": "Rare books require researcher role", "type": "constraint" }
+      ]
+    }
+  ],
+  "resolutions": [
+    { "contradictionId": "contra-xxx", "resolution": "Clarified scope: book access is role-based" }
+  ]
+})
 ```
 
-Returns executable agent prompts with:
-- Problem statement
-- Technical decisions
-- Agent prompts (research, design, implementation, test, review)
-- Success criteria
-- Execution plan with phases
-- Checkpoints for human review
+### 5. Generate Spec
 
-### 6. Execute
+Only when `readyForSpec: true` (no unresolved contradictions):
 
-Pass the compiled prompts to an orchestrator (Claude Flow, Task tool) for execution.
+```
+elenchus_spec({ "sessionId": "session-xxx" })
+```
 
 ## MCP Tools
 
 | Tool | Purpose |
 |------|---------|
-| `elenchus_ingest` | Parse epic from text, JIRA, GitHub, Notion, or Linear |
-| `elenchus_analyze` | Analyze codebase patterns, conventions, and relevant files |
-| `elenchus_interrogate` | Start/continue Socratic questioning session |
-| `elenchus_answer` | Submit answers with coverage area categorization |
-| `elenchus_generate_spec` | Gate on coverage, organize Q&A for synthesis |
-| `elenchus_compile` | Generate executable agent prompts from Q&A |
-| `elenchus_validate` | Validate spec completeness |
-| `elenchus_checkpoint` | Record checkpoint decisions during execution |
-| `elenchus_delivery` | Record what was delivered after execution |
-| `elenchus_status` | Get status of epics, sessions, or specs |
+| `elenchus_start` | Start interrogation with epic content |
+| `elenchus_qa` | Submit Q&A with premises, detect contradictions |
+| `elenchus_spec` | Generate specification (blocked if contradictions exist) |
 | `elenchus_health` | Server health check |
 
-## How Interrogation Works
+## What Makes This Socratic
 
-The calling LLM is the intelligence. Elenchus provides:
+**Standard Q&A tracking:**
+- "What users?" → "Admins and regular users" → Store it ✓
 
-1. **Coverage areas** - scope, success, constraint, risk, stakeholder, technical
-2. **Tracking** - What's been asked, what's been answered
-3. **Gating** - Blocks spec generation until required areas are covered
+**True Socratic elenchus:**
+- Extract premise: "Two user roles exist with different permissions"
+- Later: "All users can do X" → Extract premise: "No permission differences"
+- **Contradiction detected**: Cannot have role-based permissions AND no permission differences
+- **Force resolution**: "Which is true? Or clarify how both work together."
 
-The tool descriptions contain the Socratic methodology. When you call `elenchus_interrogate`, you get back:
-- The epic content
-- Current coverage percentages
-- Previous Q&A for context
-- What's missing
+This is the [four-phase elenchus](https://en.wikipedia.org/wiki/Socratic_method#Method):
+1. **Thesis** - User states a claim
+2. **Examination** - Extract premises through questioning
+3. **Refutation** - Show premises contradict
+4. **Aporia** - User recognizes inconsistency → better requirements
 
-The calling LLM reads this and formulates questions. The user answers. The LLM calls `elenchus_answer` with categorized answers. Repeat until ready.
+## Why This Matters
 
-## Executable Prompt Format
+From [Augment Code's research](https://www.augmentcode.com/guides/why-multi-agent-llm-systems-fail-and-how-to-fix-them):
+- 41.77% of agent failures are specification problems
+- 36.94% are coordination failures
+- Combined: **78.71% of failures** happen before code execution
 
-The `elenchus_compile` output includes prompts for each agent phase:
+From [Ashita AI's analysis](https://ashita.ai/blog/the-factory-without-a-design-department/):
+- "The constraint moved upstream. The tooling did not follow."
+- Everyone builds factories (orchestration). Nobody builds the design department.
 
-```json
-{
-  "problemStatement": "Build a book library API with search and checkout",
-  "technicalDecisions": [
-    { "decision": "Use Express + TypeScript", "rationale": "User requirement" }
-  ],
-  "agentPrompts": {
-    "research": "Analyze existing code patterns in /src/...",
-    "design": "Design REST endpoints for /books, /checkouts...",
-    "implementation": "Implement BookService with checkout logic...",
-    "test": "Test concurrent checkout conflicts...",
-    "review": "Verify error handling follows Result<T,E> pattern..."
-  },
-  "successCriteria": ["Search returns in <200ms", "Checkout prevents conflicts"],
-  "executionPlan": [
-    { "phase": "Research", "agent": "researcher", "estimatedEffort": "S" },
-    { "phase": "Design", "agent": "architect", "estimatedEffort": "M" }
-  ],
-  "checkpoints": [
-    { "after": "Design", "reviewCriteria": "API contract review" }
-  ]
-}
-```
-
-## Codebase Analysis
-
-When you call `elenchus_analyze`, it detects:
-
-- **Maturity**: greenfield, early, established, legacy
-- **Architecture**: monolith, microservices, serverless
-- **Conventions**: error handling, validation, testing patterns
-- **Relevant files**: What files relate to the epic
-
-This context gets included in compiled prompts so agents follow your existing patterns.
-
-## Feedback Loops
-
-Elenchus stores execution records and can learn patterns:
-
-- `ExecutionRecord` - What prompts led to success/failure
-- `PromptInsight` - Patterns like "explicit file paths → 85% success rate"
-
-These insights feed back into future compilations. No ML—just correlation tracking.
+Elenchus is the design department.
 
 ## Development
 
@@ -195,20 +175,7 @@ npm run dev       # Run with watch mode
 npm run build     # Compile TypeScript
 npm run test      # Run tests
 npm run typecheck # Type check
-npm run lint      # Lint
 ```
-
-## Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design.
-
-## Philosophy
-
-1. **Claude is the intelligence** - Elenchus provides state and prompts, not reasoning
-2. **Interrogation over speculation** - Ask questions, don't assume answers
-3. **Executable output** - Prompts for agents, not documents for humans
-4. **Gated progression** - Block advancement until requirements are met
-5. **Feedback loops** - Learn from outcomes without complex ML
 
 ## License
 

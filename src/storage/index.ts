@@ -10,10 +10,22 @@ import {
   type CodebaseContext,
   type CheckpointDecision,
   type CheckpointStatus,
+  type Signal,
+  type AnswerEvaluation,
+  type Conflict,
+  type Premise,
+  type Contradiction,
+  type Aporia,
   EpicSchema,
   InterrogationSessionSchema,
   SpecificationSchema,
   CodebaseContextSchema,
+  SignalSchema,
+  AnswerEvaluationSchema,
+  ConflictSchema,
+  PremiseSchema,
+  ContradictionSchema,
+  AporiaSchema,
 } from '../types/index.js';
 import type { Delivery } from '../types/delivery.js';
 import { generateId } from '../utils/id.js';
@@ -198,6 +210,98 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS idx_prompt_insights_pattern ON prompt_insights(pattern);
       CREATE INDEX IF NOT EXISTS idx_prompt_insights_success_rate ON prompt_insights(success_rate DESC);
       CREATE INDEX IF NOT EXISTS idx_prompt_insights_usage ON prompt_insights(usage_count DESC);
+
+      -- Signal detection tables
+      CREATE TABLE IF NOT EXISTS signals (
+        id TEXT PRIMARY KEY,
+        epic_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        quote TEXT,
+        severity TEXT NOT NULL,
+        addressed INTEGER NOT NULL DEFAULT 0,
+        addressed_by TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (epic_id) REFERENCES epics(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS answer_evaluations (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        answer_id TEXT NOT NULL,
+        score INTEGER NOT NULL,
+        reasoning TEXT NOT NULL,
+        follow_up TEXT,
+        addresses_signals TEXT NOT NULL DEFAULT '[]',
+        evaluated_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS conflicts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        answer_ids TEXT NOT NULL,
+        description TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        resolution TEXT,
+        resolved_at TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+
+      -- Indexes for new tables
+      CREATE INDEX IF NOT EXISTS idx_signals_epic ON signals(epic_id);
+      CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(type);
+      CREATE INDEX IF NOT EXISTS idx_signals_addressed ON signals(addressed);
+      CREATE INDEX IF NOT EXISTS idx_answer_evaluations_session ON answer_evaluations(session_id);
+      CREATE INDEX IF NOT EXISTS idx_answer_evaluations_answer ON answer_evaluations(answer_id);
+      CREATE INDEX IF NOT EXISTS idx_conflicts_session ON conflicts(session_id);
+      CREATE INDEX IF NOT EXISTS idx_conflicts_resolved ON conflicts(resolved);
+
+      -- Premise tracking tables (for Socratic elenchus)
+      CREATE TABLE IF NOT EXISTS premises (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        statement TEXT NOT NULL,
+        extracted_from TEXT NOT NULL,
+        type TEXT NOT NULL,
+        confidence TEXT NOT NULL DEFAULT 'high',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS contradictions (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        premise_ids TEXT NOT NULL,
+        description TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        resolution TEXT,
+        resolved_at TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS aporias (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        contradiction_id TEXT NOT NULL,
+        recognized INTEGER NOT NULL DEFAULT 0,
+        refined_statement TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id),
+        FOREIGN KEY (contradiction_id) REFERENCES contradictions(id)
+      );
+
+      -- Indexes for premise tables
+      CREATE INDEX IF NOT EXISTS idx_premises_session ON premises(session_id);
+      CREATE INDEX IF NOT EXISTS idx_premises_extracted_from ON premises(extracted_from);
+      CREATE INDEX IF NOT EXISTS idx_contradictions_session ON contradictions(session_id);
+      CREATE INDEX IF NOT EXISTS idx_contradictions_resolved ON contradictions(resolved);
+      CREATE INDEX IF NOT EXISTS idx_aporias_session ON aporias(session_id);
+      CREATE INDEX IF NOT EXISTS idx_aporias_contradiction ON aporias(contradiction_id);
     `);
   }
 
@@ -666,6 +770,678 @@ export class Storage {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
+  }
+
+  // Signal operations
+
+  saveSignal(signal: Signal): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO signals (
+        id, epic_id, type, content, quote, severity,
+        addressed, addressed_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      signal.id,
+      signal.epicId,
+      signal.type,
+      signal.content,
+      signal.quote ?? null,
+      signal.severity,
+      signal.addressed ? 1 : 0,
+      signal.addressedBy ?? null,
+      signal.createdAt
+    );
+  }
+
+  saveSignals(signals: Signal[]): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO signals (
+        id, epic_id, type, content, quote, severity,
+        addressed, addressed_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const insertMany = this.db.transaction((items: Signal[]) => {
+      for (const signal of items) {
+        stmt.run(
+          signal.id,
+          signal.epicId,
+          signal.type,
+          signal.content,
+          signal.quote ?? null,
+          signal.severity,
+          signal.addressed ? 1 : 0,
+          signal.addressedBy ?? null,
+          signal.createdAt
+        );
+      }
+    });
+
+    insertMany(signals);
+  }
+
+  getSignal(id: string): Signal | undefined {
+    const stmt = this.db.prepare('SELECT * FROM signals WHERE id = ?');
+    const row = stmt.get(id) as {
+      id: string;
+      epic_id: string;
+      type: string;
+      content: string;
+      quote: string | null;
+      severity: string;
+      addressed: number;
+      addressed_by: string | null;
+      created_at: string;
+    } | undefined;
+
+    if (!row) return undefined;
+
+    const signal = {
+      id: row.id,
+      epicId: row.epic_id,
+      type: row.type,
+      content: row.content,
+      quote: row.quote ?? undefined,
+      severity: row.severity,
+      addressed: row.addressed === 1,
+      addressedBy: row.addressed_by ?? undefined,
+      createdAt: row.created_at,
+    };
+
+    const parsed = SignalSchema.safeParse(signal);
+    if (!parsed.success) {
+      logger.error('Failed to validate signal from database', parsed.error, { id });
+      return undefined;
+    }
+    return parsed.data;
+  }
+
+  getSignalsForEpic(epicId: string): Signal[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM signals WHERE epic_id = ? ORDER BY severity DESC, created_at ASC'
+    );
+    const rows = stmt.all(epicId) as Array<{
+      id: string;
+      epic_id: string;
+      type: string;
+      content: string;
+      quote: string | null;
+      severity: string;
+      addressed: number;
+      addressed_by: string | null;
+      created_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const signal = {
+          id: row.id,
+          epicId: row.epic_id,
+          type: row.type,
+          content: row.content,
+          quote: row.quote ?? undefined,
+          severity: row.severity,
+          addressed: row.addressed === 1,
+          addressedBy: row.addressed_by ?? undefined,
+          createdAt: row.created_at,
+        };
+
+        const parsed = SignalSchema.safeParse(signal);
+        if (!parsed.success) {
+          logger.error('Failed to validate signal from database during list', parsed.error, { epicId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((signal): signal is Signal => signal !== null);
+  }
+
+  markSignalAddressed(signalId: string, answerId: string): boolean {
+    const stmt = this.db.prepare(`
+      UPDATE signals SET addressed = 1, addressed_by = ? WHERE id = ?
+    `);
+    const result = stmt.run(answerId, signalId);
+    return result.changes > 0;
+  }
+
+  // Answer evaluation operations
+
+  saveEvaluation(evaluation: AnswerEvaluation): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO answer_evaluations (
+        id, session_id, answer_id, score, reasoning,
+        follow_up, addresses_signals, evaluated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      evaluation.id,
+      evaluation.sessionId,
+      evaluation.answerId,
+      evaluation.score,
+      evaluation.reasoning,
+      evaluation.followUp ?? null,
+      JSON.stringify(evaluation.addressesSignals),
+      evaluation.evaluatedAt
+    );
+  }
+
+  saveEvaluations(evaluations: AnswerEvaluation[]): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO answer_evaluations (
+        id, session_id, answer_id, score, reasoning,
+        follow_up, addresses_signals, evaluated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const insertMany = this.db.transaction((items: AnswerEvaluation[]) => {
+      for (const evaluation of items) {
+        stmt.run(
+          evaluation.id,
+          evaluation.sessionId,
+          evaluation.answerId,
+          evaluation.score,
+          evaluation.reasoning,
+          evaluation.followUp ?? null,
+          JSON.stringify(evaluation.addressesSignals),
+          evaluation.evaluatedAt
+        );
+      }
+    });
+
+    insertMany(evaluations);
+  }
+
+  getEvaluation(answerId: string): AnswerEvaluation | undefined {
+    const stmt = this.db.prepare(
+      'SELECT * FROM answer_evaluations WHERE answer_id = ? ORDER BY evaluated_at DESC LIMIT 1'
+    );
+    const row = stmt.get(answerId) as {
+      id: string;
+      session_id: string;
+      answer_id: string;
+      score: number;
+      reasoning: string;
+      follow_up: string | null;
+      addresses_signals: string;
+      evaluated_at: string;
+    } | undefined;
+
+    if (!row) return undefined;
+
+    const evaluation = {
+      id: row.id,
+      sessionId: row.session_id,
+      answerId: row.answer_id,
+      score: row.score,
+      reasoning: row.reasoning,
+      followUp: row.follow_up ?? undefined,
+      addressesSignals: JSON.parse(row.addresses_signals),
+      evaluatedAt: row.evaluated_at,
+    };
+
+    const parsed = AnswerEvaluationSchema.safeParse(evaluation);
+    if (!parsed.success) {
+      logger.error('Failed to validate evaluation from database', parsed.error, { answerId });
+      return undefined;
+    }
+    return parsed.data;
+  }
+
+  getEvaluationsForSession(sessionId: string): AnswerEvaluation[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM answer_evaluations WHERE session_id = ? ORDER BY evaluated_at ASC'
+    );
+    const rows = stmt.all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      answer_id: string;
+      score: number;
+      reasoning: string;
+      follow_up: string | null;
+      addresses_signals: string;
+      evaluated_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const evaluation = {
+          id: row.id,
+          sessionId: row.session_id,
+          answerId: row.answer_id,
+          score: row.score,
+          reasoning: row.reasoning,
+          followUp: row.follow_up ?? undefined,
+          addressesSignals: JSON.parse(row.addresses_signals),
+          evaluatedAt: row.evaluated_at,
+        };
+
+        const parsed = AnswerEvaluationSchema.safeParse(evaluation);
+        if (!parsed.success) {
+          logger.error('Failed to validate evaluation from database during list', parsed.error, { sessionId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((eval_): eval_ is AnswerEvaluation => eval_ !== null);
+  }
+
+  // Conflict operations
+
+  saveConflict(conflict: Conflict): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO conflicts (
+        id, session_id, answer_ids, description, severity,
+        resolved, resolution, resolved_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      conflict.id,
+      conflict.sessionId,
+      JSON.stringify(conflict.answerIds),
+      conflict.description,
+      conflict.severity,
+      conflict.resolved ? 1 : 0,
+      conflict.resolution ?? null,
+      conflict.resolvedAt ?? null,
+      conflict.createdAt
+    );
+  }
+
+  saveConflicts(conflicts: Conflict[]): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO conflicts (
+        id, session_id, answer_ids, description, severity,
+        resolved, resolution, resolved_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const insertMany = this.db.transaction((items: Conflict[]) => {
+      for (const conflict of items) {
+        stmt.run(
+          conflict.id,
+          conflict.sessionId,
+          JSON.stringify(conflict.answerIds),
+          conflict.description,
+          conflict.severity,
+          conflict.resolved ? 1 : 0,
+          conflict.resolution ?? null,
+          conflict.resolvedAt ?? null,
+          conflict.createdAt
+        );
+      }
+    });
+
+    insertMany(conflicts);
+  }
+
+  getConflict(id: string): Conflict | undefined {
+    const stmt = this.db.prepare('SELECT * FROM conflicts WHERE id = ?');
+    const row = stmt.get(id) as {
+      id: string;
+      session_id: string;
+      answer_ids: string;
+      description: string;
+      severity: string;
+      resolved: number;
+      resolution: string | null;
+      resolved_at: string | null;
+      created_at: string;
+    } | undefined;
+
+    if (!row) return undefined;
+
+    const conflict = {
+      id: row.id,
+      sessionId: row.session_id,
+      answerIds: JSON.parse(row.answer_ids),
+      description: row.description,
+      severity: row.severity,
+      resolved: row.resolved === 1,
+      resolution: row.resolution ?? undefined,
+      resolvedAt: row.resolved_at ?? undefined,
+      createdAt: row.created_at,
+    };
+
+    const parsed = ConflictSchema.safeParse(conflict);
+    if (!parsed.success) {
+      logger.error('Failed to validate conflict from database', parsed.error, { id });
+      return undefined;
+    }
+    return parsed.data;
+  }
+
+  getConflictsForSession(sessionId: string): Conflict[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM conflicts WHERE session_id = ? ORDER BY severity DESC, created_at ASC'
+    );
+    const rows = stmt.all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      answer_ids: string;
+      description: string;
+      severity: string;
+      resolved: number;
+      resolution: string | null;
+      resolved_at: string | null;
+      created_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const conflict = {
+          id: row.id,
+          sessionId: row.session_id,
+          answerIds: JSON.parse(row.answer_ids),
+          description: row.description,
+          severity: row.severity,
+          resolved: row.resolved === 1,
+          resolution: row.resolution ?? undefined,
+          resolvedAt: row.resolved_at ?? undefined,
+          createdAt: row.created_at,
+        };
+
+        const parsed = ConflictSchema.safeParse(conflict);
+        if (!parsed.success) {
+          logger.error('Failed to validate conflict from database during list', parsed.error, { sessionId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((conflict): conflict is Conflict => conflict !== null);
+  }
+
+  getUnresolvedConflictsForSession(sessionId: string): Conflict[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM conflicts WHERE session_id = ? AND resolved = 0 ORDER BY severity DESC, created_at ASC'
+    );
+    const rows = stmt.all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      answer_ids: string;
+      description: string;
+      severity: string;
+      resolved: number;
+      resolution: string | null;
+      resolved_at: string | null;
+      created_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const conflict = {
+          id: row.id,
+          sessionId: row.session_id,
+          answerIds: JSON.parse(row.answer_ids),
+          description: row.description,
+          severity: row.severity,
+          resolved: row.resolved === 1,
+          resolution: row.resolution ?? undefined,
+          resolvedAt: row.resolved_at ?? undefined,
+          createdAt: row.created_at,
+        };
+
+        const parsed = ConflictSchema.safeParse(conflict);
+        if (!parsed.success) {
+          logger.error('Failed to validate conflict from database during list', parsed.error, { sessionId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((conflict): conflict is Conflict => conflict !== null);
+  }
+
+  resolveConflict(conflictId: string, resolution: string): boolean {
+    const stmt = this.db.prepare(`
+      UPDATE conflicts
+      SET resolved = 1, resolution = ?, resolved_at = ?
+      WHERE id = ?
+    `);
+    const result = stmt.run(resolution, new Date().toISOString(), conflictId);
+    return result.changes > 0;
+  }
+
+  // Premise operations (Socratic elenchus)
+
+  savePremise(premise: Premise): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO premises (
+        id, session_id, statement, extracted_from, type, confidence, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      premise.id,
+      premise.sessionId,
+      premise.statement,
+      premise.extractedFrom,
+      premise.type,
+      premise.confidence,
+      premise.createdAt
+    );
+  }
+
+  savePremises(premises: Premise[]): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO premises (
+        id, session_id, statement, extracted_from, type, confidence, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const insertMany = this.db.transaction((items: Premise[]) => {
+      for (const premise of items) {
+        stmt.run(
+          premise.id,
+          premise.sessionId,
+          premise.statement,
+          premise.extractedFrom,
+          premise.type,
+          premise.confidence,
+          premise.createdAt
+        );
+      }
+    });
+
+    insertMany(premises);
+  }
+
+  getPremisesForSession(sessionId: string): Premise[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM premises WHERE session_id = ? ORDER BY created_at ASC'
+    );
+    const rows = stmt.all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      statement: string;
+      extracted_from: string;
+      type: string;
+      confidence: string;
+      created_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const premise = {
+          id: row.id,
+          sessionId: row.session_id,
+          statement: row.statement,
+          extractedFrom: row.extracted_from,
+          type: row.type,
+          confidence: row.confidence,
+          createdAt: row.created_at,
+        };
+
+        const parsed = PremiseSchema.safeParse(premise);
+        if (!parsed.success) {
+          logger.error('Failed to validate premise from database', parsed.error, { sessionId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((premise): premise is Premise => premise !== null);
+  }
+
+  // Contradiction operations
+
+  saveContradiction(contradiction: Contradiction): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO contradictions (
+        id, session_id, premise_ids, description, severity,
+        resolved, resolution, resolved_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      contradiction.id,
+      contradiction.sessionId,
+      JSON.stringify(contradiction.premiseIds),
+      contradiction.description,
+      contradiction.severity,
+      contradiction.resolved ? 1 : 0,
+      contradiction.resolution ?? null,
+      contradiction.resolvedAt ?? null,
+      contradiction.createdAt
+    );
+  }
+
+  getContradictionsForSession(sessionId: string): Contradiction[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM contradictions WHERE session_id = ? ORDER BY severity DESC, created_at ASC'
+    );
+    const rows = stmt.all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      premise_ids: string;
+      description: string;
+      severity: string;
+      resolved: number;
+      resolution: string | null;
+      resolved_at: string | null;
+      created_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const contradiction = {
+          id: row.id,
+          sessionId: row.session_id,
+          premiseIds: JSON.parse(row.premise_ids),
+          description: row.description,
+          severity: row.severity,
+          resolved: row.resolved === 1,
+          resolution: row.resolution ?? undefined,
+          resolvedAt: row.resolved_at ?? undefined,
+          createdAt: row.created_at,
+        };
+
+        const parsed = ContradictionSchema.safeParse(contradiction);
+        if (!parsed.success) {
+          logger.error('Failed to validate contradiction from database', parsed.error, { sessionId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((c): c is Contradiction => c !== null);
+  }
+
+  getUnresolvedContradictionsForSession(sessionId: string): Contradiction[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM contradictions WHERE session_id = ? AND resolved = 0 ORDER BY severity DESC, created_at ASC'
+    );
+    const rows = stmt.all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      premise_ids: string;
+      description: string;
+      severity: string;
+      resolved: number;
+      resolution: string | null;
+      resolved_at: string | null;
+      created_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const contradiction = {
+          id: row.id,
+          sessionId: row.session_id,
+          premiseIds: JSON.parse(row.premise_ids),
+          description: row.description,
+          severity: row.severity,
+          resolved: row.resolved === 1,
+          resolution: row.resolution ?? undefined,
+          resolvedAt: row.resolved_at ?? undefined,
+          createdAt: row.created_at,
+        };
+
+        const parsed = ContradictionSchema.safeParse(contradiction);
+        if (!parsed.success) {
+          logger.error('Failed to validate contradiction from database', parsed.error, { sessionId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((c): c is Contradiction => c !== null);
+  }
+
+  resolveContradiction(contradictionId: string, resolution: string): boolean {
+    const stmt = this.db.prepare(`
+      UPDATE contradictions
+      SET resolved = 1, resolution = ?, resolved_at = ?
+      WHERE id = ?
+    `);
+    const result = stmt.run(resolution, new Date().toISOString(), contradictionId);
+    return result.changes > 0;
+  }
+
+  // Aporia operations
+
+  saveAporia(aporia: Aporia): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO aporias (
+        id, session_id, contradiction_id, recognized, refined_statement, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      aporia.id,
+      aporia.sessionId,
+      aporia.contradictionId,
+      aporia.recognized ? 1 : 0,
+      aporia.refinedStatement ?? null,
+      aporia.createdAt
+    );
+  }
+
+  getAporiasForSession(sessionId: string): Aporia[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM aporias WHERE session_id = ? ORDER BY created_at ASC'
+    );
+    const rows = stmt.all(sessionId) as Array<{
+      id: string;
+      session_id: string;
+      contradiction_id: string;
+      recognized: number;
+      refined_statement: string | null;
+      created_at: string;
+    }>;
+
+    return rows
+      .map((row) => {
+        const aporia = {
+          id: row.id,
+          sessionId: row.session_id,
+          contradictionId: row.contradiction_id,
+          recognized: row.recognized === 1,
+          refinedStatement: row.refined_statement ?? undefined,
+          createdAt: row.created_at,
+        };
+
+        const parsed = AporiaSchema.safeParse(aporia);
+        if (!parsed.success) {
+          logger.error('Failed to validate aporia from database', parsed.error, { sessionId });
+          return null;
+        }
+        return parsed.data;
+      })
+      .filter((a): a is Aporia => a !== null);
   }
 
   // Utility

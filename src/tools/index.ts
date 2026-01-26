@@ -8,17 +8,13 @@ import {
   ErrorCode,
 } from '../utils/errors.js';
 
-import { ingestTool, handleIngest } from './ingest.js';
-import { analyzeTool, handleAnalyze } from './analyze.js';
-import { interrogateTool, handleInterrogate } from './interrogate.js';
-import { answerTool, handleAnswer } from './answer.js';
-import { generateSpecTool, handleGenerateSpec } from './generate-spec.js';
-import { compileTool, handleCompile } from './compile.js';
-import { validateTool, handleValidate } from './validate.js';
-import { statusTool, handleStatus } from './status.js';
+// Core 3-tool API
+import { startTool, handleStart } from './start.js';
+import { qaTool, handleQA } from './qa.js';
+import { specTool, handleSpec } from './spec.js';
+
+// Ops tool
 import { healthTool, handleHealth } from './health.js';
-import { checkpointTool, handleCheckpoint } from './checkpoint.js';
-import { deliveryTool, handleDelivery } from './delivery.js';
 
 /**
  * Re-export error codes for backwards compatibility
@@ -28,20 +24,19 @@ export const ErrorCodes = ErrorCode;
 
 /**
  * Register all MCP tools
+ *
+ * Simplified API:
+ * - elenchus_start: Begin interrogation
+ * - elenchus_qa: Submit Q&A, get quality feedback
+ * - elenchus_spec: Generate specification
+ * - elenchus_health: Health check (ops)
  */
 export function registerTools(): Tool[] {
   return [
-    ingestTool,
-    analyzeTool,
-    interrogateTool,
-    answerTool,
-    generateSpecTool,
-    compileTool,
-    validateTool,
-    statusTool,
+    startTool,
+    qaTool,
+    specTool,
     healthTool,
-    checkpointTool,
-    deliveryTool,
   ];
 }
 
@@ -71,29 +66,20 @@ function extractContextIds(args: Record<string, unknown>): {
 
 /**
  * Handle tool calls with input validation, request tracking, and structured error responses.
- *
- * Each tool call is wrapped in a request context that provides:
- * - Unique request ID for correlating logs
- * - Tool name for filtering
- * - Epic/Session IDs when available
- * - Elapsed time tracking
  */
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
   storage: Storage
 ): Promise<{ content: TextContent[] }> {
-  // Extract context IDs for request tracking
   const { epicId, sessionId } = validateArgs(args) ? extractContextIds(args) : {};
 
-  // Wrap the entire tool call in a request context for structured logging
   return logger.withRequestContext(
     { toolName: name, epicId, sessionId },
     async () => {
       const requestId = logger.getRequestId();
 
       try {
-        // Validate args is a proper object
         if (!validateArgs(args)) {
           logger.warn('Invalid arguments received', undefined, {
             argType: typeof args,
@@ -126,53 +112,25 @@ export async function handleToolCall(
         let result: unknown;
 
         switch (name) {
-          case 'elenchus_ingest':
-            result = await handleIngest(args, storage);
+          case 'elenchus_start':
+            result = await handleStart(args, storage);
             break;
 
-          case 'elenchus_analyze':
-            result = await handleAnalyze(args, storage);
+          case 'elenchus_qa':
+            result = await handleQA(args, storage);
             break;
 
-          case 'elenchus_interrogate':
-            result = await handleInterrogate(args, storage);
-            break;
-
-          case 'elenchus_answer':
-            result = await handleAnswer(args, storage);
-            break;
-
-          case 'elenchus_generate_spec':
-            result = await handleGenerateSpec(args, storage);
-            break;
-
-          case 'elenchus_compile':
-            result = await handleCompile(args, storage);
-            break;
-
-          case 'elenchus_validate':
-            result = await handleValidate(args, storage);
-            break;
-
-          case 'elenchus_status':
-            result = await handleStatus(args, storage);
+          case 'elenchus_spec':
+            result = await handleSpec(args, storage);
             break;
 
           case 'elenchus_health':
             result = await handleHealth(args, storage);
             break;
 
-          case 'elenchus_checkpoint':
-            result = await handleCheckpoint(args, storage);
-            break;
-
-          case 'elenchus_delivery':
-            result = await handleDelivery(args, storage);
-            break;
-
           default:
             logger.warn('Unknown tool requested', undefined, { tool: name });
-            throw new Error(`Unknown tool: ${name}`);
+            throw new Error(`Unknown tool: ${name}. Available: elenchus_start, elenchus_qa, elenchus_spec, elenchus_health`);
         }
 
         const elapsedMs = logger.getElapsedMs();
@@ -188,11 +146,8 @@ export async function handleToolCall(
         };
       } catch (error) {
         const elapsedMs = logger.getElapsedMs();
-
-        // Classify the error to get appropriate code and structure
         const classified = classifyError(error);
 
-        // Log error with full context (requestId automatically included)
         logger.error('Tool call failed', error, {
           code: classified.code,
           httpStatus: classified.httpStatus,

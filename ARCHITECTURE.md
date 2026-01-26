@@ -2,280 +2,165 @@
 
 ## Overview
 
-Elenchus is an **Interrogative Specification Compiler**—an MCP server that transforms vague human intent into executable agent prompts through Socratic questioning.
+Elenchus implements **true Socratic elenchus** for software specification.
 
 ```
-Human Intent + Codebase → [Elenchus] → Executable Agent Prompts
-                              ↓
-                     State + Prompts (Elenchus)
-                     Intelligence (Calling LLM)
+Epic → [elenchus_start] → Session
+                            ↓
+      [elenchus_qa] ← Q&A + Premises + Contradictions
+            ↓
+      Contradiction? → Force Resolution (Aporia)
+            ↓
+      readyForSpec? → [elenchus_spec]
 ```
 
 ## Core Insight
 
-**Claude is the intelligence. Elenchus is the infrastructure.**
+**Claude is the intelligence. Elenchus tracks state and enforces gates.**
 
-We don't need:
-- Regex keyword matching
-- Template selection logic
-- ML models
-- Custom NLP
+What we track:
+- **Premises**: Logical commitments extracted from answers
+- **Contradictions**: Conflicts between premises
+- **Coverage**: Which areas have been addressed
+- **Quality**: Score thresholds
 
-We need:
-- Smart prompts that guide Claude's reasoning
-- State management across sessions
-- Codebase context injection
-- Coverage tracking and gating
+What Claude does:
+- Extract premises from user answers
+- Detect contradictions between premises
+- Generate challenge questions
+- Synthesize final specification
 
-Elenchus provides structure. The calling LLM provides reasoning.
+## The Four-Phase Elenchus
 
-## Two Layers of Contracts
+| Phase | What Happens | Elenchus Support |
+|-------|--------------|------------------|
+| **Thesis** | User makes a claim | Store in session |
+| **Examination** | Extract logical premises | `premises` array in qa input |
+| **Refutation** | Detect contradictions | `contradictions` input, `contradictionCheckPrompt` output |
+| **Aporia** | User confronts inconsistency | `challengeQuestion` output, `resolutions` input |
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    LAYER 1: INTENT CONTRACT                      │
-│                         (ELENCHUS)                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Human ←→ Agent agreement on WHAT to build:                      │
-│                                                                  │
-│  • Scope boundaries (what's in, what's out)                      │
-│  • Success criteria (how we know it's done)                      │
-│  • Constraints (must have, must not have)                        │
-│  • Technical decisions (pre-made vs. agent decides)              │
-│  • Checkpoints (when to pause for human review)                  │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    LAYER 2: EXECUTION                            │
-│              (External Orchestrator - Claude Flow, etc.)         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Agent ←→ Systems agreement on HOW to execute:                   │
-│                                                                  │
-│  • Tool availability                                             │
-│  • File system access                                            │
-│  • API connections                                               │
-│  • Checkpoint enforcement                                        │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+## Data Model
+
+### Premise
+
+```typescript
+interface Premise {
+  id: string;
+  sessionId: string;
+  statement: string;          // "All users have export access"
+  extractedFrom: string;      // answerId
+  type: 'capability' | 'constraint' | 'requirement' | 'assumption' | 'preference';
+  confidence: 'high' | 'medium' | 'low';
+  createdAt: string;
+}
 ```
 
-Elenchus produces Layer 1. External orchestrators handle Layer 2.
+### Contradiction
 
-## Pipeline
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         ELENCHUS                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐           │
-│  │   INGEST    │──▶│   ANALYZE   │──▶│ INTERROGATE │           │
-│  │   (parse)   │   │ (codebase)  │   │   (Q&A)     │           │
-│  └─────────────┘   └─────────────┘   └──────┬──────┘           │
-│                                              │                   │
-│                                              ▼                   │
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐           │
-│  │   COMPILE   │◀──│  GENERATE   │◀──│   ANSWER    │           │
-│  │  (prompts)  │   │   (spec)    │   │  (record)   │           │
-│  └──────┬──────┘   └─────────────┘   └─────────────┘           │
-│         │                                                        │
-│         │  Executable Agent Prompts                              │
-│         ▼                                                        │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ {                                                            ││
-│  │   "agentPrompts": {                                          ││
-│  │     "research": "...",                                       ││
-│  │     "design": "...",                                         ││
-│  │     "implementation": "...",                                 ││
-│  │     "test": "...",                                           ││
-│  │     "review": "..."                                          ││
-│  │   },                                                         ││
-│  │   "executionPlan": [...],                                    ││
-│  │   "checkpoints": [...]                                       ││
-│  │ }                                                            ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+```typescript
+interface Contradiction {
+  id: string;
+  sessionId: string;
+  premiseIds: string[];       // At least 2 conflicting premises
+  description: string;        // Why they conflict
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  resolved: boolean;
+  resolution?: string;
+  resolvedAt?: string;
+  createdAt: string;
+}
 ```
 
 ## MCP Tools
 
-### Epic Lifecycle
+| Tool | Input | Output |
+|------|-------|--------|
+| `elenchus_start` | Epic content | epicId, sessionId, signals |
+| `elenchus_qa` | Q&A + premises + contradictions + resolutions | coverage, elenchus state, contradictionCheckPrompt, challengeQuestion |
+| `elenchus_spec` | sessionId | organized Q&A + premises + synthesis prompt |
+| `elenchus_health` | - | server status |
 
-| Tool | Input | Output | Gate |
-|------|-------|--------|------|
-| `elenchus_ingest` | Raw text, JIRA ID, etc. | Parsed epic with extracted goals | - |
-| `elenchus_analyze` | Codebase path | Patterns, conventions, relevant files | - |
-| `elenchus_interrogate` | Epic ID | Epic + coverage state + Q&A history | - |
-| `elenchus_answer` | Session ID + categorized answers | Updated coverage | - |
-| `elenchus_generate_spec` | Session ID | Organized Q&A for synthesis | Coverage ≥ 80% |
-| `elenchus_compile` | Session ID | Executable agent prompts | Coverage ≥ 80% |
+## Readiness Gate
 
-### Post-Execution
+Cannot generate spec until:
+1. All 4 required areas covered (scope, success, constraint, risk)
+2. No answers scored below 3
+3. **No unresolved critical contradictions** (the key Socratic gate)
+4. At least 4 total answers
 
-| Tool | Purpose |
-|------|---------|
-| `elenchus_validate` | Validate spec before execution |
-| `elenchus_checkpoint` | Record human decisions at checkpoints |
-| `elenchus_delivery` | Record what was delivered |
-| `elenchus_status` | Get status of any entity |
-| `elenchus_health` | Server health check |
+## The Contradiction Check Prompt
 
-## Coverage System
+After each `elenchus_qa`, we return a prompt for the calling LLM:
 
-Elenchus tracks coverage across six areas:
+```
+You have accumulated the following premises:
+1. [prem-1] (capability) "All users have export access"
+2. [prem-2] (constraint) "PII must be protected"
+3. [prem-3] (assumption) "Exports go to Excel"
 
-| Area | Required | Purpose |
-|------|----------|---------|
-| `scope` | Yes | What's in/out, boundaries |
-| `success` | Yes | Acceptance criteria, how to validate |
-| `constraint` | Yes | Technical, timeline, budget limits |
-| `risk` | Yes | What could fail, mitigation |
-| `stakeholder` | No | Who uses it, who's affected |
-| `technical` | No | Tech stack, architecture decisions |
-
-**Gate**: Cannot call `elenchus_generate_spec` or `elenchus_compile` until all required areas have at least one answered question.
-
-**Clarity Score**: Percentage of required areas covered. Must reach 80% to proceed.
-
-## Interrogation Flow
-
-The interrogation methodology is embedded in the `elenchus_interrogate` tool description. When called:
-
-1. Tool returns: epic content, coverage state, previous Q&A
-2. Calling LLM reads epic, identifies gaps, formulates questions
-3. User answers questions
-4. LLM calls `elenchus_answer` with categorized answers
-5. Repeat until clarity ≥ 80%
-
-The LLM is the intelligence. Elenchus tracks state and enforces gates.
-
-## Prompt Library
-
-Located in `/src/prompts/index.ts`. These are prompts that guide the calling LLM:
-
-| Function | Purpose |
-|----------|---------|
-| `buildEpicAnalysisPrompt` | Extract goals, constraints, criteria from raw epic |
-| `buildCodebaseAnalysisPrompt` | Identify patterns and conventions |
-| `buildInterrogationPrompt` | Generate contextual questions |
-| `buildAnswerAnalysisPrompt` | Extract facts, detect contradictions |
-| `buildReadinessPrompt` | Assess if ready for compilation |
-| `buildCompilationPrompt` | Generate executable agent prompts |
-| `buildConflictResolutionPrompt` | Resolve contradictions |
-| `buildCoverageAssessmentPrompt` | Assess coverage by area |
-
-## Executable Prompt Format
-
-The output of `elenchus_compile`:
-
-```typescript
-interface CompileOutput {
-  compilationPrompt: string;      // Full prompt for generating agent prompts
-  context: {
-    epic: { id, title, rawContent };
-    codebase: { techStack, conventions, relevantFiles } | null;
-    facts: Array<{ statement, confidence, area, source }>;
-    insights: Array<{ pattern, recommendation }>;
-  };
-  expectedOutputSchema: string;   // JSON schema documentation
-  instructions: string;           // Step-by-step for calling LLM
-}
+Analyze for LOGICAL CONTRADICTIONS...
 ```
 
-The calling LLM uses this to generate:
+The calling LLM runs this, detects conflicts, reports them back.
 
-```typescript
-interface ExecutableAgentPrompts {
-  problemStatement: string;
-  technicalDecisions: Array<{ decision, rationale, alternatives? }>;
-  agentPrompts: {
-    research: string;
-    design: string;
-    implementation: string;
-    test: string;
-    review: string;
-  };
-  successCriteria: string[];
-  risksAndMitigation: Array<{ risk, severity, mitigation }>;
-  executionPlan: Array<{ phase, agent, inputs, outputs, estimatedEffort }>;
-  checkpoints: Array<{ after, reviewCriteria, decision }>;
-}
-```
+## Challenge Question
+
+When contradictions exist, we generate a Socratic challenge:
+
+> "You said 'All users have export access' AND 'PII must be protected'.
+> Excel files can be shared freely. These cannot both be true.
+> Which is ESSENTIAL, or how do they work together?"
+
+This forces **aporia** - the productive state of puzzlement that leads to better requirements.
 
 ## Storage
 
-SQLite database with tables:
+SQLite with tables:
 
 | Table | Purpose |
 |-------|---------|
-| `epics` | Ingested epics with extracted info |
-| `sessions` | Interrogation sessions with Q&A |
-| `specs` | Generated specifications |
-| `contexts` | Codebase analysis results |
-| `checkpoint_decisions` | Recorded checkpoint approvals/rejections |
-| `deliveries` | What was delivered post-execution |
-| `execution_records` | Prompt → outcome for feedback loops |
-| `prompt_insights` | Learned patterns from outcomes |
-
-## Feedback Loops
-
-Elenchus can learn from execution outcomes:
-
-1. **ExecutionRecord**: When agents execute prompts, record success/failure
-2. **PromptInsight**: Correlate patterns with outcomes (e.g., "explicit file paths → 85% success")
-3. **Inclusion**: `elenchus_compile` includes insights in output
-
-No ML. Just correlation tracking: "Prompts with X succeed 80% vs 40% without."
+| `epics` | Epic content |
+| `sessions` | Q&A state |
+| `premises` | Logical commitments |
+| `contradictions` | Detected conflicts |
+| `aporias` | Resolution state |
+| `signals` | Gaps, tensions, assumptions |
+| `evaluations` | Answer quality scores |
 
 ## Directory Structure
 
 ```
 elenchus/
 ├── src/
-│   ├── index.ts           # Entry point
-│   ├── server.ts          # MCP server setup
-│   ├── tools/             # MCP tool implementations
-│   │   ├── ingest.ts
-│   │   ├── analyze.ts
-│   │   ├── interrogate.ts
-│   │   ├── answer.ts
-│   │   ├── generate-spec.ts
-│   │   ├── compile.ts     # Key output generator
-│   │   ├── validate.ts
-│   │   ├── checkpoint.ts
-│   │   ├── delivery.ts
-│   │   ├── status.ts
-│   │   ├── health.ts
-│   │   └── detectors/     # Language detection (Python, TS, Go, PHP)
-│   ├── prompts/           # Prompt builders
-│   │   └── index.ts
-│   ├── resources/         # MCP resources
-│   ├── storage/           # SQLite persistence
-│   ├── types/             # TypeScript definitions
-│   └── utils/             # Helpers (logging, errors, security)
-├── tests/                 # Test files
-└── docs/                  # Reference documentation
+│   ├── tools/
+│   │   ├── start.ts      # elenchus_start
+│   │   ├── qa.ts         # elenchus_qa (with premise/contradiction logic)
+│   │   ├── spec.ts       # elenchus_spec
+│   │   └── health.ts     # elenchus_health
+│   ├── types/
+│   │   └── signals.ts    # Premise, Contradiction, Aporia types
+│   ├── storage/
+│   │   └── index.ts      # SQLite persistence
+│   └── prompts/
+│       └── index.ts      # Signal detection prompt
 ```
 
-## What Elenchus Doesn't Do
+## What Makes This Different
 
-| Don't Build | Why |
-|-------------|-----|
-| Custom orchestrator | Use Claude Flow, Task tool |
-| ML models | Claude + correlation is sufficient |
-| Regex/templates for reasoning | Claude understands semantically |
-| IDE integration | MCP is the interface |
-| Code execution | External orchestrators handle this |
+| Standard Approach | Elenchus Approach |
+|-------------------|-------------------|
+| Track Q&A | Track premises (logical commitments) |
+| Check coverage | Check coverage + contradictions |
+| Generate when complete | Generate when consistent |
+| No conflict detection | Explicit contradiction detection |
+| No forced resolution | Must resolve before proceeding |
 
-## Key Design Decisions
+## The Value Proposition
 
-1. **State in SQLite** - Persistence across sessions, simple queries
-2. **Prompts not code** - Tool descriptions contain methodology
-3. **Gates not advice** - Block progression until requirements met
-4. **JSON output** - Agent consumption, not human reading
-5. **Codebase awareness** - Prompts reference actual patterns
-6. **Feedback without ML** - Simple correlation, no training
+From research:
+- 41.77% of agent failures are specification problems
+- These happen BEFORE any code runs
+- Most tools focus on execution (factories)
+- Nobody focuses on specification (design department)
+
+Elenchus is the design department that catches contradictions before they become bugs.

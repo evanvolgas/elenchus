@@ -118,6 +118,46 @@ export {
   CreateDeliveryInputSchema,
 } from './delivery.js';
 
+// Signal detection and answer evaluation types
+export {
+  type Signal,
+  type SignalType,
+  type SignalSeverity,
+  type AnswerEvaluation,
+  type SpecificityScore,
+  type Conflict,
+  type ConflictSeverity,
+  type ConflictResolutionDecision,
+  type StoreSignalsInput,
+  type StoreEvaluationsInput,
+  type ResolveConflictInput,
+  type QualityIssue,
+  type ReadinessAdvisory,
+  type QualityMetrics,
+  // Premise types for Socratic elenchus
+  type Premise,
+  type Contradiction,
+  type Aporia,
+  SignalSchema,
+  SignalTypeSchema,
+  SignalSeveritySchema,
+  AnswerEvaluationSchema,
+  SpecificityScoreSchema,
+  ConflictSchema,
+  ConflictSeveritySchema,
+  ConflictResolutionDecisionSchema,
+  StoreSignalsInputSchema,
+  StoreEvaluationsInputSchema,
+  ResolveConflictInputSchema,
+  QualityIssueSchema,
+  ReadinessAdvisorySchema,
+  QualityMetricsSchema,
+  // Premise schemas
+  PremiseSchema,
+  ContradictionSchema,
+  AporiaSchema,
+} from './signals.js';
+
 // Re-export utility types for convenience
 export type {
   // Error types
