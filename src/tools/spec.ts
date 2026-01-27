@@ -59,15 +59,9 @@ Address those via more elenchus_qa rounds first.`,
   },
 };
 
-/**
- * Q&A entry in the spec
- */
-interface QAEntry {
-  area: string;
-  question: string;
-  answer: string;
-  score?: number | undefined;
-}
+import type { StructuredSpec } from '../engines/spec-synthesizer.js';
+import type { Specification } from '../types/spec.js';
+import type { SpecEnhancement } from '../engines/llm-spec-enhancer.js';
 
 /**
  * Result from elenchus_spec
@@ -75,34 +69,17 @@ interface QAEntry {
 export interface SpecResult {
   ready: boolean;
   blockers?: string[];
-  spec?: {
-    epicId: string;
-    sessionId: string;
-    title: string;
-    problemStatement: string;
-    scope: {
-      inScope: string[];
-      outOfScope: string[];
-      boundaries: string[];
-    };
-    successCriteria: string[];
-    constraints: string[];
-    risks: Array<{
-      risk: string;
-      mitigation: string;
-    }>;
-    technicalDecisions: string[];
-    qaLog: QAEntry[];
-    metadata: {
-      totalQuestions: number;
-      totalAnswers: number;
-      averageScore: number;
-      generatedAt: string;
-      forced: boolean;
-    };
-  };
+  structuredSpec?: StructuredSpec;
+  specification?: Specification;
   synthesisPrompt?: string;
+  /** LLM-powered enhancement with inferred requirements, risks, and unknowns */
+  enhancement?: SpecEnhancement | undefined;
+  /** Whether LLM enhancement was applied */
+  llmEnhanced?: boolean | undefined;
 }
+
+import { SpecSynthesizer } from '../engines/spec-synthesizer.js';
+import { enhanceSpecWithLLM } from '../engines/llm-spec-enhancer.js';
 
 /**
  * Handle spec generation
@@ -140,169 +117,117 @@ export async function handleSpec(
     };
   }
 
-  // Get evaluations for scoring
+  // Get all the data needed for synthesis
   const evaluations = storage.getEvaluationsForSession(sessionId);
-  const scoreMap = new Map(evaluations.map(e => [e.answerId, e.score]));
+  const signals = storage.getSignalsForEpic(epic.id);
+  const conflicts = storage.getConflictsForSession(sessionId);
 
-  // Build Q&A log organized by area
-  const qaLog: QAEntry[] = session.questions.map(q => {
-    const answer = session.answers.find(a => a.questionId === q.id);
+  // Use the spec synthesizer engine
+  const synthesizer = new SpecSynthesizer();
+  const structuredSpec = synthesizer.synthesize(epic, session, evaluations, signals, conflicts);
+
+  // Convert to Specification type for storage
+  const specification = synthesizer.toSpecification(structuredSpec, epic);
+
+  // Store the specification
+  storage.saveSpec(specification);
+
+  // Build synthesis prompt for Claude (for transparency)
+  const synthesisPrompt = buildSynthesisPrompt(epic, structuredSpec);
+
+  // ========================================================================
+  // LLM-ENHANCED: Enhance the spec with semantic intelligence
+  // Adds inferred requirements, risks, unknowns, and executive summary
+  // ========================================================================
+  const qaLog = session.questions.map((q, i) => {
+    const answer = session.answers[i];
     return {
-      area: q.type,
       question: q.question,
-      answer: answer?.answer || '[No answer]',
-      score: scoreMap.get(q.id),
+      answer: answer?.answer ?? '(no answer)',
+      area: q.type,
     };
   });
 
-  // Extract by area
-  const byArea = (area: string) => qaLog.filter(qa => qa.area === area);
+  const specSummary = `Tier: ${structuredSpec.metadata.tier}/5, ` +
+    `Confidence: ${Math.round(structuredSpec.metadata.confidence * 100)}%, ` +
+    `Requirements: ${structuredSpec.requirements.length}, ` +
+    `Constraints: ${structuredSpec.constraints.length}, ` +
+    `Risks: ${structuredSpec.risks.length}, ` +
+    `Unknowns: ${structuredSpec.unknowns.length}`;
 
-  // Build scope from scope answers
-  const scopeAnswers = byArea('scope');
-  const inScope: string[] = [];
-  const outOfScope: string[] = [];
-  const boundaries: string[] = [];
-
-  for (const qa of scopeAnswers) {
-    const lower = qa.answer.toLowerCase();
-    if (lower.includes('not') || lower.includes('out of scope') || lower.includes("won't") || lower.includes("don't")) {
-      outOfScope.push(qa.answer);
-    } else {
-      inScope.push(qa.answer);
-    }
-    boundaries.push(`Q: ${qa.question}\nA: ${qa.answer}`);
-  }
-
-  // Build success criteria from success answers
-  const successCriteria = byArea('success').map(qa => qa.answer);
-
-  // Build constraints from constraint answers
-  const constraints = byArea('constraint').map(qa => qa.answer);
-
-  // Build risks from risk answers
-  const riskAnswers = byArea('risk');
-  const risks = riskAnswers.map(qa => ({
-    risk: qa.question,
-    mitigation: qa.answer,
-  }));
-
-  // Build technical decisions from technical answers
-  const technicalDecisions = byArea('technical').map(qa => `${qa.question}: ${qa.answer}`);
-
-  // Calculate metadata
-  const scores = evaluations.map(e => e.score);
-  const averageScore = scores.length > 0
-    ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100
-    : 0;
-
-  // Build problem statement from epic + answers
-  const problemStatement = buildProblemStatement(epic.rawContent, qaLog);
-
-  // Build synthesis prompt for Claude
-  const synthesisPrompt = buildSynthesisPrompt(epic, qaLog);
+  const enhancement = await enhanceSpecWithLLM(
+    epic.rawContent,
+    qaLog,
+    specSummary,
+  );
 
   return {
     ready: true,
-    spec: {
-      epicId: epic.id,
-      sessionId: session.id,
-      title: epic.title,
-      problemStatement,
-      scope: {
-        inScope,
-        outOfScope,
-        boundaries,
-      },
-      successCriteria,
-      constraints,
-      risks,
-      technicalDecisions,
-      qaLog,
-      metadata: {
-        totalQuestions: session.questions.length,
-        totalAnswers: session.answers.length,
-        averageScore,
-        generatedAt: new Date().toISOString(),
-        forced: force,
-      },
-    },
+    structuredSpec,
+    specification,
     synthesisPrompt,
+    enhancement: enhancement ?? undefined,
+    llmEnhanced: enhancement !== null,
   };
 }
 
 /**
- * Build problem statement from epic and Q&A
- */
-function buildProblemStatement(rawContent: string, qaLog: QAEntry[]): string {
-  // Start with the epic's first sentence/paragraph
-  const firstPara = rawContent.split('\n')[0] || rawContent.slice(0, 200);
-
-  // Add key scope clarifications
-  const scopeItems = qaLog
-    .filter(qa => qa.area === 'scope' && qa.score && qa.score >= 3)
-    .map(qa => qa.answer)
-    .slice(0, 3);
-
-  if (scopeItems.length > 0) {
-    return `${firstPara}\n\nKey clarifications:\n- ${scopeItems.join('\n- ')}`;
-  }
-
-  return firstPara;
-}
-
-/**
- * Build synthesis prompt for Claude to create the final spec
+ * Build synthesis prompt for transparency
+ *
+ * This shows what the synthesizer extracted and how it structured the spec.
  */
 function buildSynthesisPrompt(
   epic: { title: string; rawContent: string },
-  qaLog: QAEntry[]
+  spec: StructuredSpec
 ): string {
-  const qaByArea: Record<string, QAEntry[]> = {};
-  for (const qa of qaLog) {
-    const area = qa.area;
-    if (!qaByArea[area]) {
-      qaByArea[area] = [];
-    }
-    qaByArea[area]!.push(qa);
-  }
-
-  const formatQA = (entries: QAEntry[] | undefined) =>
-    entries?.map(qa => `Q: ${qa.question}\nA: ${qa.answer}${qa.score ? ` [${qa.score}/5]` : ''}`).join('\n\n') ?? 'None';
-
-  return `You have completed a Socratic interrogation. Now synthesize the results into a specification.
+  return `The spec synthesizer has analyzed the interrogation and created a structured specification.
 
 ## ORIGINAL EPIC
 ${epic.rawContent}
 
-## INTERROGATION RESULTS
+## SYNTHESIS RESULTS
 
-### Scope (${qaByArea['scope']?.length || 0} Q&A)
-${qaByArea['scope'] ? formatQA(qaByArea['scope']) : 'None'}
+**Quality Tier**: ${spec.metadata.tier}/5
+**Confidence**: ${Math.round(spec.metadata.confidence * 100)}%
 
-### Success Criteria (${qaByArea['success']?.length || 0} Q&A)
-${qaByArea['success'] ? formatQA(qaByArea['success']) : 'None'}
+### Requirements Extracted: ${spec.requirements.length}
+${spec.requirements.slice(0, 5).map(r =>
+  `- [${r.priority.toUpperCase()}] ${r.description} (certainty: ${r.certainty})`
+).join('\n')}
+${spec.requirements.length > 5 ? `\n... and ${spec.requirements.length - 5} more` : ''}
 
-### Constraints (${qaByArea['constraint']?.length || 0} Q&A)
-${qaByArea['constraint'] ? formatQA(qaByArea['constraint']) : 'None'}
+### Constraints: ${spec.constraints.length}
+${spec.constraints.slice(0, 3).map(c => `- [${c.type}] ${c.description}`).join('\n')}
+${spec.constraints.length > 3 ? `\n... and ${spec.constraints.length - 3} more` : ''}
 
-### Risks (${qaByArea['risk']?.length || 0} Q&A)
-${qaByArea['risk'] ? formatQA(qaByArea['risk']) : 'None'}
+### Risks: ${spec.risks.length}
+${spec.risks.slice(0, 3).map(r =>
+  `- ${r.risk} (${r.likelihood} likelihood, ${r.impact} impact)\n  Mitigation: ${r.mitigation}`
+).join('\n')}
+${spec.risks.length > 3 ? `\n... and ${spec.risks.length - 3} more` : ''}
 
-### Technical (${qaByArea['technical']?.length || 0} Q&A)
-${qaByArea['technical'] ? formatQA(qaByArea['technical']) : 'None'}
+### Unknowns: ${spec.unknowns.length}
+${spec.unknowns.slice(0, 3).map(u =>
+  `- [${u.impact.toUpperCase()}] ${u.question}\n  Recommendation: ${u.recommendation}`
+).join('\n')}
+${spec.unknowns.length > 3 ? `\n... and ${spec.unknowns.length - 3} more` : ''}
 
-## YOUR TASK
+### Execution Plan
+${spec.executionGuidance.phases.map(p =>
+  `**${p.name}**: ${p.tasks.length} tasks${p.parallel ? ' (parallel)' : ' (sequential)'}`
+).join('\n')}
 
-Synthesize this into a coherent specification. The spec should:
+**Critical Path**: ${spec.executionGuidance.criticalPath.join(' → ')}
 
-1. **Problem Statement**: What are we building and why?
-2. **Scope**: Clear boundaries - what's in, what's out
-3. **Success Criteria**: Testable conditions for "done"
-4. **Technical Approach**: Key decisions and their rationale
-5. **Risks**: What could go wrong and how we'll handle it
-6. **Execution Plan**: High-level phases/milestones
+## NEXT STEPS
 
-Ground everything in the actual Q&A. Don't invent requirements not discussed.
-If something is unclear, note it as a known gap rather than guessing.`;
+The specification is ready for execution. You can now:
+
+1. Review the structured spec for accuracy
+2. Address any unknowns that have high impact
+3. Begin execution using the generated phases and tasks
+4. Use checkpoints to validate progress
+
+All detail from the interrogation has been preserved in the structured format.
+Requirements are hierarchical, with relationships tracked between related items.`;
 }

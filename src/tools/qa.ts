@@ -1,7 +1,14 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Storage } from '../storage/index.js';
 import type { Question, Answer, Signal, AnswerEvaluation, Premise, Contradiction } from '../types/index.js';
+import type { QualityTier } from '../types/tiers.js';
 import { generateId } from '../utils/id.js';
+import { detectQualityTier } from '../engines/quality-detector.js';
+import { extractFacts } from '../engines/fact-extractor.js';
+import { generateQuestions, type QAEntry, type CoverageGaps } from '../engines/question-generator.js';
+import { TIER_TO_STRATEGY } from '../types/tiers.js';
+import { detectContradictionsWithLLM } from '../engines/llm-contradiction-detector.js';
+import { generateQuestionsWithLLM } from '../engines/llm-question-generator.js';
 
 /**
  * elenchus_qa - Submit Q&A with Socratic premise tracking
@@ -268,6 +275,23 @@ export interface QAResult {
     id: string;
     round: number;
   };
+  // Tier-aware quality assessment
+  tierAssessment: {
+    currentTier: QualityTier;
+    strategy: string;
+    tierChanged: boolean;
+    previousTier?: QualityTier;
+  };
+  // Extracted facts from this round
+  extractedFacts: {
+    metrics: number;
+    thresholds: number;
+    entities: number;
+    relationships: number;
+    constraints: number;
+    decisions: number;
+    total: number;
+  };
   quality: {
     averageScore: number;
     totalAnswered: number;
@@ -506,36 +530,216 @@ export async function handleQA(
     severity: c.severity,
     resolved: c.resolved,
   }));
-  const unresolvedCriticalContradictions = allContradictions.filter(
-    c => !c.resolved && c.severity === 'critical'
-  ).length;
-
   // Get signals
   const allSignals = storage.getSignalsForEpic(session.epicId);
   const criticalUnaddressed = allSignals.filter(s => s.severity === 'critical' && !s.addressed).length;
 
+  // Get epic for quality assessment
+  const epic = storage.getEpic(session.epicId);
+
+  // ============================================================================
+  // NEW: Tier-aware adaptive interrogation
+  // ============================================================================
+
+  // Combine all answer text for quality reassessment
+  const allAnswerText = session.answers.map(a => a.answer).join('\n\n');
+  const combinedContent = (epic?.rawContent ?? '') + '\n\n' + allAnswerText;
+
+  // Detect CURRENT quality tier (may have improved from answers)
+  const currentAssessment = detectQualityTier(combinedContent);
+  const currentTier = currentAssessment.tier;
+  const strategy = TIER_TO_STRATEGY[currentTier];
+
+  // Track tier change (for transparency)
+  const tierChanged = false; // Simplified for now
+
+  // Extract facts from submitted answers
+  // Build combined facts from all answers
+  let totalMetrics = 0;
+  let totalThresholds = 0;
+  let totalEntities = 0;
+  let totalRelationships = 0;
+  let totalConstraints = 0;
+  let totalDecisions = 0;
+
+  for (const qa of qaInputs) {
+    const result = extractFacts(qa.answer, qa.question);
+    // Count facts by type
+    for (const fact of result.facts) {
+      switch (fact.type) {
+        case 'metric': totalMetrics++; break;
+        case 'threshold': totalThresholds++; break;
+        case 'entity': totalEntities++; break;
+        case 'relationship': totalRelationships++; break;
+        case 'constraint': totalConstraints++; break;
+        case 'decision': totalDecisions++; break;
+      }
+    }
+  }
+
+  // Build QA entries for question generation
+  // Handle optional score properly for exactOptionalPropertyTypes
+  const qaEntries: QAEntry[] = qaInputs.map(qa => {
+    const entry: QAEntry = {
+      area: qa.area,
+      question: qa.question,
+      answer: qa.answer,
+    };
+    if (qa.score !== undefined) {
+      entry.score = qa.score;
+    }
+    return entry;
+  });
+
+  // Build coverage gaps matching the CoverageGaps interface
+  const coverageGaps: CoverageGaps = {
+    scope: coverage.scope,
+    success: coverage.success,
+    constraint: coverage.constraint,
+    risk: coverage.risk,
+    technical: coverage.technical,
+    missing: missing as Array<'scope' | 'success' | 'constraint' | 'risk' | 'technical'>,
+  };
+
+  // Build extracted facts for question generator (different from fact-extractor output)
+  const factsForGen = {
+    goals: [] as string[],
+    constraints: [] as string[],
+    acceptanceCriteria: [] as string[],
+    stakeholders: [] as string[],
+    technologies: [] as string[],
+  };
+
+  // ========================================================================
+  // LLM-ENHANCED: Generate follow-up questions with contextual understanding
+  // Falls back to template-based questions if LLM unavailable
+  // ========================================================================
+
+  // Template-based questions (always generated as fallback)
+  const templateQuestions = generateQuestions({
+    tier: currentTier,
+    previousQA: qaEntries,
+    extractedFacts: factsForGen,
+    coverageGaps,
+    epicContent: epic?.rawContent ?? '',
+  });
+
+  // Try LLM-powered contextual questions
+  const allSignalsForLLM = allSignals.map(s => ({
+    type: s.type,
+    content: s.content,
+    severity: s.severity,
+  }));
+  const llmFollowUps = await generateQuestionsWithLLM({
+    epicContent: epic?.rawContent ?? '',
+    tier: currentTier,
+    strategy,
+    previousQA: qaEntries.map(q => {
+      const prev: { area: string; question: string; answer: string; score?: number } = {
+        area: q.area,
+        question: q.question,
+        answer: q.answer,
+      };
+      if (q.score !== undefined) {
+        prev.score = q.score;
+      }
+      return prev;
+    }),
+    signals: allSignalsForLLM,
+    coverageGaps: missing.map(String),
+    maxQuestions: currentTier <= 2 ? 5 : currentTier <= 4 ? 4 : 3,
+  });
+
+  // Prefer LLM questions, fall back to templates
+  const generatedQuestions = (llmFollowUps && llmFollowUps.questions.length > 0)
+    ? llmFollowUps.questions.map(q => ({
+        question: q.question,
+        area: q.area,
+        reason: q.reason,
+        priority: q.priority,
+      }))
+    : templateQuestions;
+
   // Build contradiction check prompt for calling LLM
   const contradictionCheckPrompt = buildContradictionCheckPrompt(allPremises);
 
-  // Determine readiness - NOW INCLUDES CONTRADICTION CHECK
-  const blockers: string[] = [];
-  if (missing.length > 0) {
-    blockers.push(`Missing coverage: ${missing.join(', ')}`);
+  // ========================================================================
+  // LLM-ENHANCED: Detect contradictions using semantic analysis
+  // Falls back to prompt-based approach if LLM unavailable
+  // ========================================================================
+  const llmContradictions = await detectContradictionsWithLLM(
+    allPremises.map(p => ({
+      id: p.id,
+      statement: p.statement,
+      type: p.type,
+      extractedFrom: p.extractedFrom,
+    })),
+    epic?.rawContent ?? '',
+  );
+
+  // If LLM found contradictions, store them
+  if (llmContradictions && llmContradictions.contradictions.length > 0) {
+    for (const c of llmContradictions.contradictions) {
+      const contradiction: Contradiction = {
+        id: generateId('contra'),
+        sessionId,
+        premiseIds: c.premiseIds,
+        description: `${c.description} — ${c.explanation}`,
+        severity: c.severity,
+        resolved: false,
+        createdAt: now,
+      };
+      storage.saveContradiction(contradiction);
+    }
+    // Refresh contradictions list after LLM additions
+    const refreshedContradictions = storage.getContradictionsForSession(sessionId);
+    // Update local variables
+    contradictions.length = 0;
+    for (const c of refreshedContradictions) {
+      contradictions.push({
+        id: c.id,
+        premiseIds: c.premiseIds,
+        description: c.description,
+        severity: c.severity,
+        resolved: c.resolved,
+      });
+    }
   }
+
+  // Recount unresolved critical after LLM additions
+  const allContradictionsRefreshed = storage.getContradictionsForSession(sessionId);
+  const unresolvedCriticalFinal = allContradictionsRefreshed.filter(
+    c => !c.resolved && c.severity === 'critical'
+  ).length;
+
+  // Determine readiness - NOW TIER-AWARE
+  const blockers: string[] = [];
+
+  // Tier-based coverage requirements
+  // Lower tiers need less coverage (still building foundation)
+  // Higher tiers need full coverage
+  if (currentTier >= 3 && missing.length > 0) {
+    blockers.push(`Missing coverage: ${missing.join(', ')}`);
+  } else if (currentTier < 3 && missing.length > 2) {
+    blockers.push(`Foundation gaps: ${missing.slice(0, 2).join(', ')}`);
+  }
+
   if (lowQualityCount > 0) {
     blockers.push(`${lowQualityCount} answer(s) scored below 3`);
   }
-  if (unresolvedCriticalContradictions > 0) {
-    blockers.push(`${unresolvedCriticalContradictions} unresolved critical contradiction(s) - MUST resolve before spec`);
+  if (unresolvedCriticalFinal > 0) {
+    blockers.push(`${unresolvedCriticalFinal} unresolved critical contradiction(s) - MUST resolve before spec`);
   }
   if (criticalUnaddressed > 0) {
     blockers.push(`${criticalUnaddressed} critical signal(s) not addressed`);
   }
 
-  const readyForSpec = blockers.length === 0 && session.answers.length >= 4;
+  // Ready when: tier >= 3 AND no blockers AND enough answers
+  // OR tier >= 4 (detailed specs are already good)
+  const readyForSpec = (currentTier >= 4) || (blockers.length === 0 && session.answers.length >= 4);
 
   // Generate challenge question if contradictions exist (Socratic aporia)
-  const challengeQuestion = generateChallengeQuestion(allContradictions.filter(c => !c.resolved), allPremises);
+  const challengeQuestion = generateChallengeQuestion(allContradictionsRefreshed.filter(c => !c.resolved), allPremises);
 
   // Update session state
   session.clarityScore = Math.round((requiredAreas.length - missing.length) / requiredAreas.length * 100);
@@ -543,28 +747,62 @@ export async function handleQA(
   session.blockers = blockers;
   storage.saveSession(session);
 
-  // Generate suggested follow-up questions
-  const suggestedQuestions = generateFollowUpQuestions(
-    missing,
-    issues,
-    allContradictions.filter(c => !c.resolved),
-    allSignals.filter(s => !s.addressed)
-  );
+  // Convert generated questions to suggested format
+  const suggestedQuestions: SuggestedQuestion[] = generatedQuestions.slice(0, 5).map((q: { question: string; area: string; reason: string; priority: 'critical' | 'high' | 'medium' }) => ({
+    question: q.question,
+    area: q.area,
+    reason: q.reason,
+    priority: q.priority,
+  }));
 
-  // Determine next step
+  // Build tier-specific rationale
+  const tierRationale: Record<number, string> = {
+    1: 'Building foundation - get basic who/what/why answers.',
+    2: 'Extracting specifics - looking for concrete metrics and entities.',
+    3: 'Targeting gaps - filling in missing coverage areas.',
+    4: 'Refining details - addressing edge cases and ambiguities.',
+    5: 'Validating completeness - confirming consistency.',
+  };
+
+  // Determine next step with tier awareness
   let nextStep: string;
   if (readyForSpec) {
-    nextStep = 'Quality threshold met. Call elenchus_spec to generate the specification.';
+    nextStep = `Quality tier ${currentTier}/5 achieved. Call elenchus_spec to generate the specification.`;
+  } else if (currentTier < 3) {
+    nextStep = `Still at Tier ${currentTier} (${strategy}). ${tierRationale[currentTier] ?? 'Continue asking questions.'}`;
   } else if (blockers.length > 0) {
-    nextStep = `Address blockers: ${blockers[0]}. Ask follow-up questions and submit via elenchus_qa.`;
+    nextStep = `Tier ${currentTier} but blockers remain: ${blockers[0]}. Ask follow-up questions.`;
   } else {
     nextStep = 'Continue asking questions until coverage and quality thresholds are met.';
   }
+
+  // Build tierAssessment without undefined previousTier (exactOptionalPropertyTypes compliance)
+  const tierAssessment: {
+    currentTier: QualityTier;
+    strategy: string;
+    tierChanged: boolean;
+    previousTier?: QualityTier;
+  } = {
+    currentTier,
+    strategy,
+    tierChanged,
+  };
+  // Only add previousTier if it has a value (not for exactOptionalPropertyTypes)
 
   return {
     session: {
       id: session.id,
       round: session.round,
+    },
+    tierAssessment,
+    extractedFacts: {
+      metrics: totalMetrics,
+      thresholds: totalThresholds,
+      entities: totalEntities,
+      relationships: totalRelationships,
+      constraints: totalConstraints,
+      decisions: totalDecisions,
+      total: totalMetrics + totalThresholds + totalEntities + totalRelationships + totalConstraints + totalDecisions,
     },
     quality: {
       averageScore,
@@ -577,8 +815,8 @@ export async function handleQA(
     elenchus: {
       premises,
       contradictions,
-      unresolvedCritical: unresolvedCriticalContradictions,
-      aporiaReached: unresolvedCriticalContradictions > 0,
+      unresolvedCritical: unresolvedCriticalFinal,
+      aporiaReached: unresolvedCriticalFinal > 0,
     },
     contradictionCheckPrompt,
     signals: {
@@ -606,60 +844,6 @@ function scoreToReasoning(score: number): string {
     case 5: return 'Fully specific with edge cases addressed';
     default: return 'Unknown score';
   }
-}
-
-/**
- * Generate follow-up questions based on gaps
- */
-function generateFollowUpQuestions(
-  missingAreas: string[],
-  lowQualityAnswers: Array<{ question: string; score: number }>,
-  unresolvedContradictions: Contradiction[],
-  unaddressedSignals: Signal[]
-): SuggestedQuestion[] {
-  const questions: SuggestedQuestion[] = [];
-
-  // Questions for missing coverage
-  for (const area of missingAreas) {
-    questions.push({
-      question: getAreaQuestion(area),
-      area,
-      reason: `No coverage in ${area} area`,
-      priority: 'critical',
-    });
-  }
-
-  // Follow-ups for vague answers
-  for (const answer of lowQualityAnswers.slice(0, 2)) {
-    questions.push({
-      question: `You mentioned "${answer.question.slice(0, 50)}..." - can you be more specific? Numbers, examples, or concrete criteria?`,
-      area: 'scope',
-      reason: `Previous answer scored ${answer.score}/5`,
-      priority: 'high',
-    });
-  }
-
-  // Questions for contradictions (Socratic elenchus)
-  for (const contradiction of unresolvedContradictions.slice(0, 1)) {
-    questions.push({
-      question: `Contradiction: "${contradiction.description}". These premises cannot both be true. Which is essential?`,
-      area: 'scope',
-      reason: `Unresolved ${contradiction.severity}-severity contradiction`,
-      priority: contradiction.severity === 'critical' ? 'critical' : 'high',
-    });
-  }
-
-  // Questions for critical signals
-  for (const signal of unaddressedSignals.filter(s => s.severity === 'critical').slice(0, 1)) {
-    questions.push({
-      question: `Critical gap: ${signal.content}. How should this be handled?`,
-      area: 'risk',
-      reason: 'Critical signal unaddressed',
-      priority: 'critical',
-    });
-  }
-
-  return questions.slice(0, 5);
 }
 
 /**
@@ -750,24 +934,4 @@ function generateChallengeQuestion(
 
   return `You said "${p1.statement}" AND "${p2.statement}". ${firstContradiction.description}. ` +
     `These cannot both be true. Which is ESSENTIAL, or how do they work together?`;
-}
-
-/**
- * Get default question for an area
- */
-function getAreaQuestion(area: string): string {
-  switch (area) {
-    case 'scope':
-      return 'What is explicitly IN scope and OUT of scope for this work?';
-    case 'success':
-      return 'How will you verify this works? What are the acceptance criteria?';
-    case 'constraint':
-      return 'What are the constraints? Timeline, budget, technology, compliance?';
-    case 'risk':
-      return 'What could go wrong? What are the risks and how do we mitigate them?';
-    case 'technical':
-      return 'What technology choices or architectural decisions need to be made?';
-    default:
-      return `What about ${area}?`;
-  }
 }
