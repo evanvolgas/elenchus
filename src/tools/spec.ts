@@ -61,7 +61,7 @@ Address those via more elenchus_qa rounds first.`,
 
 import type { StructuredSpec } from '../engines/spec-synthesizer.js';
 import type { Specification } from '../types/spec.js';
-import type { SpecEnhancement } from '../engines/llm-spec-enhancer.js';
+import type { ImplementationBlueprint } from '../engines/llm-spec-decomposer.js';
 
 /**
  * Result from elenchus_spec
@@ -72,14 +72,14 @@ export interface SpecResult {
   structuredSpec?: StructuredSpec;
   specification?: Specification;
   synthesisPrompt?: string;
-  /** LLM-powered enhancement with inferred requirements, risks, and unknowns */
-  enhancement?: SpecEnhancement | undefined;
-  /** Whether LLM enhancement was applied */
+  /** LLM-powered implementation blueprint with files, models, APIs, tasks, tests */
+  blueprint?: ImplementationBlueprint | undefined;
+  /** Whether LLM decomposition was applied */
   llmEnhanced?: boolean | undefined;
 }
 
 import { SpecSynthesizer } from '../engines/spec-synthesizer.js';
-import { enhanceSpecWithLLM } from '../engines/llm-spec-enhancer.js';
+import { decomposeWithLLM } from '../engines/llm-spec-decomposer.js';
 
 /**
  * Handle spec generation
@@ -136,8 +136,8 @@ export async function handleSpec(
   const synthesisPrompt = buildSynthesisPrompt(epic, structuredSpec);
 
   // ========================================================================
-  // LLM-ENHANCED: Enhance the spec with semantic intelligence
-  // Adds inferred requirements, risks, unknowns, and executive summary
+  // LLM DECOMPOSITION: Transform Q&A into agent-executable blueprint
+  // Produces file manifest, data models, API contracts, task graph, tests
   // ========================================================================
   const qaLog = session.questions.map((q, i) => {
     const answer = session.answers[i];
@@ -148,26 +148,45 @@ export async function handleSpec(
     };
   });
 
-  const specSummary = `Tier: ${structuredSpec.metadata.tier}/5, ` +
+  const premises = storage.getPremisesForSession(sessionId);
+  const contradictions = storage.getContradictionsForSession(sessionId);
+
+  const structuralSummary = `Tier: ${structuredSpec.metadata.tier}/5, ` +
     `Confidence: ${Math.round(structuredSpec.metadata.confidence * 100)}%, ` +
     `Requirements: ${structuredSpec.requirements.length}, ` +
     `Constraints: ${structuredSpec.constraints.length}, ` +
     `Risks: ${structuredSpec.risks.length}, ` +
     `Unknowns: ${structuredSpec.unknowns.length}`;
 
-  const enhancement = await enhanceSpecWithLLM(
-    epic.rawContent,
+  const blueprint = await decomposeWithLLM({
+    epicContent: epic.rawContent,
     qaLog,
-    specSummary,
-  );
+    signals: signals.map(s => ({
+      type: s.type,
+      content: s.content,
+      severity: s.severity,
+      addressed: s.addressed,
+    })),
+    premises: premises.map(p => ({
+      statement: p.statement,
+      type: p.type,
+      confidence: p.confidence,
+    })),
+    contradictions: contradictions.map(c => ({
+      description: c.description,
+      resolved: c.resolved,
+      resolution: c.resolution,
+    })),
+    structuralSummary,
+  });
 
   return {
     ready: true,
     structuredSpec,
     specification,
     synthesisPrompt,
-    enhancement: enhancement ?? undefined,
-    llmEnhanced: enhancement !== null,
+    blueprint: blueprint ?? undefined,
+    llmEnhanced: blueprint !== null,
   };
 }
 

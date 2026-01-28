@@ -165,6 +165,33 @@ describe('Full Flow E2E', () => {
 
     // llmEnhanced field should exist (true if API key set, false if not)
     expect(typeof specResult['llmEnhanced']).toBe('boolean');
+
+    // If LLM is available, blueprint should contain agent-executable artifacts
+    if (specResult['llmEnhanced']) {
+      const blueprint = specResult['blueprint'] as Record<string, unknown>;
+      expect(blueprint).toBeDefined();
+      expect(typeof blueprint['problemStatement']).toBe('string');
+      expect((blueprint['problemStatement'] as string).length).toBeGreaterThan(0);
+      expect(Array.isArray(blueprint['fileManifest'])).toBe(true);
+      expect((blueprint['fileManifest'] as unknown[]).length).toBeGreaterThan(0);
+      expect(Array.isArray(blueprint['taskGraph'])).toBe(true);
+      expect((blueprint['taskGraph'] as unknown[]).length).toBeGreaterThan(0);
+
+      // File manifest entries should have concrete paths
+      const files = blueprint['fileManifest'] as Array<Record<string, unknown>>;
+      for (const file of files) {
+        expect(typeof file['path']).toBe('string');
+        expect(typeof file['purpose']).toBe('string');
+      }
+
+      // Task graph entries should have IDs and dependencies
+      const tasks = blueprint['taskGraph'] as Array<Record<string, unknown>>;
+      for (const task of tasks) {
+        expect(typeof task['id']).toBe('string');
+        expect(typeof task['title']).toBe('string');
+        expect(Array.isArray(task['dependsOn'])).toBe(true);
+      }
+    }
   });
 
   it('should reject spec generation when session is not ready and force=false', { timeout: E2E_TIMEOUT }, async () => {

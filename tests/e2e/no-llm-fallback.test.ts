@@ -100,10 +100,10 @@ describe('Graceful Degradation (no LLM)', () => {
     expect(specResult['structuredSpec']).toBeDefined();
     expect(specResult['specification']).toBeDefined();
 
-    // LLM enhancement should be absent
+    // LLM decomposition should be absent (no API key)
     expect(specResult['llmEnhanced']).toBe(false);
-    // enhancement should be undefined (not present or null)
-    expect(specResult['enhancement']).toBeUndefined();
+    // blueprint should be undefined (not present or null)
+    expect(specResult['blueprint']).toBeUndefined();
 
     // Structural spec should still have content
     const structuredSpec = specResult['structuredSpec'] as Record<string, unknown>;
