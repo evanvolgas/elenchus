@@ -49,3 +49,14 @@ docs/competitive-*.md
 docs/gap-*.md
 docs/socratic-*.md
 docs/ai-coding-*.md
+docs/SPEC-REFINEMENT-ARCHITECTURE.md
+docs/SPECIFICATION-GRANULARITY-ANALYSIS.md
+docs/TIER-SYSTEM.md
+docs/adr/
+docs/quality-detection-usage.md
+docs/spec-synthesizer.md
+docs/tier-system-architecture.md
+docs/tier-system-examples.md
+docs/tier-system-summary.md
+docs/tier-system-validation.ts
+scripts/test-tiers.ts
