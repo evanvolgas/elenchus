@@ -123,7 +123,7 @@ export function handleResourceRead(
   let url: URL;
   try {
     url = new URL(uri);
-  } catch (parseError) {
+  } catch (_parseError) {
     throw new Error(
       `Invalid URI format: ${uri}. Expected format: elenchus://{type}/{id}`
     );

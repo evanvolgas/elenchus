@@ -679,15 +679,14 @@ export async function decomposeWithLLM(
       lastError = new Error(`Validation failed: ${validation.issues.join(', ')}`);
 
     } catch (error) {
-      logger.warn('LLM call failed for spec decomposition', { attempt, error });
+      logger.warn('LLM call failed for spec decomposition', error, { attempt });
       lastError = error;
     }
   }
 
   // All retries exhausted
-  logger.error('Failed to decompose spec with LLM after all retries', {
+  logger.error('Failed to decompose spec with LLM after all retries', lastError, {
     totalAttempts: MAX_RETRIES + 1,
-    lastError,
     lastValidationIssues: lastValidationResult?.issues ?? [],
   });
 
