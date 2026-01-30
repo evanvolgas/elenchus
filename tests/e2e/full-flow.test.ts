@@ -10,10 +10,11 @@ import { handleToolCall } from '../../src/tools/index.js';
 
 /**
  * These tests call real tool handlers. When ANTHROPIC_API_KEY is set,
- * LLM calls are made which can take 5-15 seconds each.
- * The full flow test makes ~5 LLM calls, so it needs generous timeout.
+ * LLM calls are made which can take 5-30 seconds each.
+ * The full flow test makes ~5-8 LLM calls (including potential retries),
+ * so it needs generous timeout.
  */
-const E2E_TIMEOUT = 120_000; // 2 minutes
+const E2E_TIMEOUT = 300_000; // 5 minutes
 
 /** Parse the JSON from a tool call result */
 function parseResult(result: { content: Array<{ type: string; text: string }> }): Record<string, unknown> {

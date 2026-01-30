@@ -314,60 +314,122 @@ export interface DecomposerInput {
 // =============================================================================
 
 /**
- * Validate the LLM response matches ImplementationBlueprint structure.
- * Validates required fields and basic types. Permissive on optional fields.
+ * Validation result with detailed issues for potential repair.
  */
-function validateBlueprint(response: unknown): response is ImplementationBlueprint {
-  if (!response || typeof response !== 'object') return false;
+interface ValidationResult {
+  valid: boolean;
+  repairable: boolean;
+  issues: string[];
+  repaired?: Record<string, unknown> | undefined;
+}
+
+/**
+ * Validate the LLM response matches ImplementationBlueprint structure.
+ * Returns detailed result including whether the response can be repaired.
+ *
+ * A response is "repairable" if it has enough structure that we can
+ * synthesize missing required fields from existing data.
+ */
+function validateBlueprintDetailed(response: unknown): ValidationResult {
+  const issues: string[] = [];
+
+  if (!response || typeof response !== 'object') {
+    return { valid: false, repairable: false, issues: ['Response is not an object'] };
+  }
 
   const r = response as Record<string, unknown>;
 
-  // Required string fields
-  if (typeof r.problemStatement !== 'string' || r.problemStatement.length === 0) {
-    logger.warn('Blueprint validation: missing problemStatement');
-    return false;
+  // Check problemStatement
+  const hasProblemStatement = typeof r.problemStatement === 'string' && r.problemStatement.length > 0;
+  if (!hasProblemStatement) {
+    issues.push('missing problemStatement');
   }
 
-  // Required arrays
-  if (!Array.isArray(r.fileManifest) || r.fileManifest.length === 0) {
-    logger.warn('Blueprint validation: missing or empty fileManifest');
-    return false;
+  // Check fileManifest
+  const hasFileManifest = Array.isArray(r.fileManifest) && r.fileManifest.length > 0;
+  if (!hasFileManifest) {
+    issues.push('missing or empty fileManifest');
   }
-  if (!Array.isArray(r.taskGraph) || r.taskGraph.length === 0) {
-    logger.warn('Blueprint validation: missing or empty taskGraph');
-    return false;
+
+  // Check taskGraph
+  const hasTaskGraph = Array.isArray(r.taskGraph) && r.taskGraph.length > 0;
+  if (!hasTaskGraph) {
+    issues.push('missing or empty taskGraph');
   }
 
   // Optional arrays (must be arrays if present)
   for (const field of ['dataModels', 'apiContracts', 'testScenarios', 'decisionsLog', 'openQuestions']) {
     if (r[field] !== undefined && !Array.isArray(r[field])) {
-      logger.warn(`Blueprint validation: ${field} is not an array`);
-      return false;
+      issues.push(`${field} is not an array`);
     }
   }
 
-  // Validate fileManifest entries
-  for (const file of r.fileManifest as unknown[]) {
-    if (!file || typeof file !== 'object') return false;
-    const f = file as Record<string, unknown>;
-    if (typeof f.path !== 'string' || typeof f.purpose !== 'string') {
-      logger.warn('Blueprint validation: fileManifest entry missing path or purpose');
-      return false;
+  // Validate fileManifest entries if present
+  if (hasFileManifest) {
+    for (let i = 0; i < (r.fileManifest as unknown[]).length; i++) {
+      const file = (r.fileManifest as unknown[])[i];
+      if (!file || typeof file !== 'object') {
+        issues.push(`fileManifest[${i}] is not an object`);
+        continue;
+      }
+      const f = file as Record<string, unknown>;
+      if (typeof f.path !== 'string') {
+        issues.push(`fileManifest[${i}] missing path`);
+      }
+      if (typeof f.purpose !== 'string') {
+        issues.push(`fileManifest[${i}] missing purpose`);
+      }
     }
   }
 
-  // Validate taskGraph entries
-  for (const task of r.taskGraph as unknown[]) {
-    if (!task || typeof task !== 'object') return false;
-    const t = task as Record<string, unknown>;
-    if (typeof t.id !== 'string' || typeof t.title !== 'string') {
-      logger.warn('Blueprint validation: taskGraph entry missing id or title');
-      return false;
+  // Validate taskGraph entries if present
+  if (hasTaskGraph) {
+    for (let i = 0; i < (r.taskGraph as unknown[]).length; i++) {
+      const task = (r.taskGraph as unknown[])[i];
+      if (!task || typeof task !== 'object') {
+        issues.push(`taskGraph[${i}] is not an object`);
+        continue;
+      }
+      const t = task as Record<string, unknown>;
+      if (typeof t.id !== 'string') {
+        issues.push(`taskGraph[${i}] missing id`);
+      }
+      if (typeof t.title !== 'string') {
+        issues.push(`taskGraph[${i}] missing title`);
+      }
     }
   }
 
-  return true;
+  // Determine if valid or repairable
+  const valid = issues.length === 0;
+
+  // Repairable if we have fileManifest and taskGraph but just missing problemStatement
+  // We can synthesize problemStatement from the tasks
+  const repairable = !valid && hasFileManifest && hasTaskGraph && !hasProblemStatement &&
+    issues.filter(i => !i.includes('problemStatement')).length === 0;
+
+  let repaired: Record<string, unknown> | undefined;
+  if (repairable) {
+    // Synthesize problemStatement from task titles
+    const tasks = r.taskGraph as Array<{ title?: string; description?: string }>;
+    const taskSummary = tasks
+      .slice(0, 3)
+      .map(t => t.title ?? t.description ?? '')
+      .filter(s => s.length > 0)
+      .join('; ');
+
+    repaired = {
+      ...r,
+      problemStatement: `Implementation to: ${taskSummary || 'execute the defined tasks'}`,
+    };
+
+    logger.info('Repaired blueprint by synthesizing problemStatement from taskGraph');
+  }
+
+  return { valid, repairable, issues, repaired };
 }
+
+// validateBlueprint removed - now using validateBlueprintDetailed directly
 
 /**
  * Normalize the LLM response, filling in missing optional arrays with empty arrays.
@@ -479,16 +541,35 @@ function unwrapResponse(response: Record<string, unknown>): unknown {
 }
 
 // =============================================================================
+// Retry Configuration
+// =============================================================================
+
+const MAX_RETRIES = 1; // Only 1 retry to avoid excessive test time
+const BASE_DELAY_MS = 500; // Shorter delay
+
+/**
+ * Sleep for a given number of milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// =============================================================================
 // Main Function
 // =============================================================================
 
 /**
  * Decompose an interrogated epic into an agent-executable implementation blueprint.
  *
+ * Features:
+ * - Retry logic with exponential backoff on validation failure
+ * - Automatic repair of partial responses (e.g., missing problemStatement)
+ * - Detailed error logging for debugging
+ *
  * Returns null when:
  * - ANTHROPIC_API_KEY is not set (graceful degradation)
- * - LLM call fails
- * - Response fails validation
+ * - LLM call fails after retries
+ * - Response fails validation and cannot be repaired
  */
 export async function decomposeWithLLM(
   params: DecomposerInput
@@ -506,57 +587,109 @@ export async function decomposeWithLLM(
     contradictionCount: params.contradictions.length,
   });
 
-  try {
-    const userPrompt = buildUserPrompt(params);
+  const userPrompt = buildUserPrompt(params);
+  let lastError: unknown = null;
+  let lastValidationResult: ValidationResult | null = null;
 
-    const rawResponse = await callLLM<Record<string, unknown>>(
-      SYSTEM_PROMPT,
-      userPrompt,
-      {
-        temperature: 0.3,
-        maxTokens: 16384,
-      },
-    );
-
-    if (!rawResponse) {
-      logger.warn('LLM returned null response for spec decomposition');
-      return null;
-    }
-
-    // Unwrap common LLM wrapping patterns: { blueprint: {...} }, { result: {...} }, etc.
-    const response = unwrapResponse(rawResponse);
-
-    if (!validateBlueprint(response)) {
-      const respObj = response as Record<string, unknown>;
-      logger.error('LLM response failed blueprint validation', {
-        keys: Object.keys(respObj),
-        hasProblemStatement: typeof respObj['problemStatement'],
-        hasFileManifest: Array.isArray(respObj['fileManifest']),
-        hasTaskGraph: Array.isArray(respObj['taskGraph']),
-        sampleKeys: Object.keys(respObj).slice(0, 5),
-        // Log first nested key if it exists
-        firstKeyType: Object.keys(respObj).length > 0
-          ? typeof respObj[Object.keys(respObj)[0]!]
-          : 'empty',
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      logger.info(`Retrying spec decomposition (attempt ${attempt + 1}/${MAX_RETRIES + 1})`, {
+        delayMs,
+        previousIssues: lastValidationResult?.issues ?? [],
       });
-      return null;
+      await sleep(delayMs);
     }
 
-    const blueprint = normalizeBlueprint(response);
+    try {
+      const rawResponse = await callLLM<Record<string, unknown>>(
+        SYSTEM_PROMPT,
+        userPrompt,
+        {
+          temperature: 0.3 + (attempt * 0.1), // Slightly increase temperature on retry
+          maxTokens: 16384,
+        },
+      );
 
-    logger.info('Successfully decomposed spec into blueprint', {
-      files: blueprint.fileManifest.length,
-      models: blueprint.dataModels.length,
-      endpoints: blueprint.apiContracts.length,
-      tasks: blueprint.taskGraph.length,
-      tests: blueprint.testScenarios.length,
-      decisions: blueprint.decisionsLog.length,
-      openQuestions: blueprint.openQuestions.length,
-    });
+      if (!rawResponse) {
+        logger.warn('LLM returned null response for spec decomposition', { attempt });
+        lastError = new Error('LLM returned null');
+        continue;
+      }
 
-    return blueprint;
-  } catch (error) {
-    logger.error('Failed to decompose spec with LLM', { error });
-    return null;
+      // Unwrap common LLM wrapping patterns: { blueprint: {...} }, { result: {...} }, etc.
+      const response = unwrapResponse(rawResponse);
+      const validation = validateBlueprintDetailed(response);
+      lastValidationResult = validation;
+
+      if (validation.valid) {
+        // Perfect response - normalize and return
+        const blueprint = normalizeBlueprint(response as ImplementationBlueprint);
+        logger.info('Successfully decomposed spec into blueprint', {
+          attempt,
+          files: blueprint.fileManifest.length,
+          models: blueprint.dataModels.length,
+          endpoints: blueprint.apiContracts.length,
+          tasks: blueprint.taskGraph.length,
+          tests: blueprint.testScenarios.length,
+          decisions: blueprint.decisionsLog.length,
+          openQuestions: blueprint.openQuestions.length,
+        });
+        return blueprint;
+      }
+
+      if (validation.repairable && validation.repaired) {
+        // Response can be repaired - normalize the repaired version and return
+        const blueprint = normalizeBlueprint(validation.repaired as unknown as ImplementationBlueprint);
+        logger.info('Successfully decomposed spec into blueprint (with repair)', {
+          attempt,
+          repairedFields: validation.issues,
+          files: blueprint.fileManifest.length,
+          models: blueprint.dataModels.length,
+          endpoints: blueprint.apiContracts.length,
+          tasks: blueprint.taskGraph.length,
+          tests: blueprint.testScenarios.length,
+          decisions: blueprint.decisionsLog.length,
+          openQuestions: blueprint.openQuestions.length,
+        });
+        return blueprint;
+      }
+
+      // Not valid and not repairable - log details and retry
+      const respObj = response as Record<string, unknown>;
+      logger.warn('LLM response failed blueprint validation', {
+        attempt,
+        issues: validation.issues,
+        repairable: validation.repairable,
+        responseKeys: Object.keys(respObj).slice(0, 10),
+        hasProblemStatement: typeof respObj['problemStatement'],
+        problemStatementLength: typeof respObj['problemStatement'] === 'string'
+          ? (respObj['problemStatement'] as string).length
+          : 0,
+        hasFileManifest: Array.isArray(respObj['fileManifest']),
+        fileManifestLength: Array.isArray(respObj['fileManifest'])
+          ? (respObj['fileManifest'] as unknown[]).length
+          : 0,
+        hasTaskGraph: Array.isArray(respObj['taskGraph']),
+        taskGraphLength: Array.isArray(respObj['taskGraph'])
+          ? (respObj['taskGraph'] as unknown[]).length
+          : 0,
+      });
+
+      lastError = new Error(`Validation failed: ${validation.issues.join(', ')}`);
+
+    } catch (error) {
+      logger.warn('LLM call failed for spec decomposition', { attempt, error });
+      lastError = error;
+    }
   }
+
+  // All retries exhausted
+  logger.error('Failed to decompose spec with LLM after all retries', {
+    totalAttempts: MAX_RETRIES + 1,
+    lastError,
+    lastValidationIssues: lastValidationResult?.issues ?? [],
+  });
+
+  return null;
 }

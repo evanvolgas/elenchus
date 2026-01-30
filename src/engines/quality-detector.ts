@@ -1,11 +1,34 @@
 /**
- * Quality Detection Engine
+ * Quality Detection Engine - STRUCTURAL BASELINE LAYER
  *
- * Analyzes epic content quality BEFORE interrogation begins.
- * Uses multi-pass structural analysis to detect specificity, coverage, and gaps.
+ * This module provides the STRUCTURAL baseline for quality assessment. It uses
+ * pattern matching (regex) for STRUCTURAL indicators only - not for semantic
+ * understanding. The two-layer architecture:
  *
- * No regex for semantic understanding - structural patterns only.
- * The calling LLM does the smart work.
+ * LAYER 1 (This file): Structural Baseline
+ * - Detects presence/absence of numbers, units, actors, technologies
+ * - Counts keyword matches for area coverage (scope, success, constraint, etc.)
+ * - Identifies vague language patterns ("fast", "scalable", "good")
+ * - Calculates specificity scores based on structural indicators
+ * - ALWAYS runs - provides baseline even without LLM
+ *
+ * LAYER 2 (llm-signal-detector.ts, llm-question-generator.ts, etc.): Semantic Analysis
+ * - Uses Claude to understand MEANING and find contradictions
+ * - Detects semantic gaps (not just keyword absence)
+ * - Finds tensions between requirements that seem compatible
+ * - Generates contextual questions based on understanding
+ * - OPTIONAL - gracefully degrades when ANTHROPIC_API_KEY is unset
+ *
+ * WHY THIS DESIGN:
+ * 1. Structural baseline ensures Elenchus works without API keys
+ * 2. LLM layer adds semantic depth when available
+ * 3. Clean separation: structural patterns here, semantic reasoning in llm-* files
+ * 4. Both layers inform the calling LLM (Claude in Claude Code) which does final synthesis
+ *
+ * WHAT THIS IS NOT:
+ * - This is NOT semantic understanding via regex (that would be wrong)
+ * - This is NOT trying to replace LLM reasoning
+ * - This IS detecting structural indicators that hint at quality level
  */
 
 /**

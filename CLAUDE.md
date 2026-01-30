@@ -45,6 +45,15 @@ npm run typecheck    # Check types
 ### File Organization
 
 - `/src/tools/` - MCP tool implementations (start.ts, qa.ts, spec.ts, health.ts)
+- `/src/engines/` - Analysis engines (two-layer architecture):
+  - `quality-detector.ts` - **Layer 1**: Structural baseline quality assessment
+  - `fact-extractor.ts` - **Layer 1**: Structural fact extraction from answers
+  - `question-generator.ts` - **Layer 1**: Template-based question generation
+  - `llm-client.ts` - **Layer 2**: Anthropic API client with graceful degradation
+  - `llm-signal-detector.ts` - **Layer 2**: Semantic signal detection
+  - `llm-question-generator.ts` - **Layer 2**: Contextual question generation
+  - `llm-contradiction-detector.ts` - **Layer 2**: Semantic contradiction detection
+  - `llm-spec-decomposer.ts` - **Layer 2**: Implementation blueprint generation
 - `/src/storage/` - Database and persistence
 - `/src/types/` - TypeScript interfaces and types
 - `/src/utils/` - Shared utilities
@@ -65,14 +74,42 @@ npm run typecheck    # Check types
 - No `any` types - use `unknown` with type guards
 - Prefer `interface` over `type` for object shapes
 
-### Key Design Principle
+### Key Design Principle: Two-Layer Architecture
 
-**Claude is the intelligence. Elenchus provides structure.**
+**Claude is the intelligence. Elenchus provides structure and state management.**
 
-- No regex for content understanding
-- No keyword matching for semantics
-- The calling LLM does all reasoning
-- Elenchus tracks state and enforces gates
+Elenchus uses a two-layer architecture for signal detection and question generation:
+
+#### Layer 1: Structural Baseline (Always runs)
+
+Files: `quality-detector.ts`, structural functions in `start.ts`, `fact-extractor.ts`
+
+- Uses pattern matching (regex) for **structural indicators only**
+- Detects presence/absence of keywords, numbers, units, actors
+- Calculates specificity scores from structural patterns
+- Provides baseline functionality **without requiring API keys**
+- **NOT semantic understanding** - cannot understand meaning or context
+
+Example: The structural layer detects "no 'error' keyword found" - it cannot tell
+if error handling is actually discussed using different words.
+
+#### Layer 2: LLM-Powered Semantic Analysis (Optional, when API key present)
+
+Files: `llm-signal-detector.ts`, `llm-question-generator.ts`, `llm-contradiction-detector.ts`, `llm-spec-decomposer.ts`
+
+- Uses Claude API for **semantic understanding**
+- Detects meaning, contradictions, tensions, implicit assumptions
+- Generates contextual questions based on understanding
+- Gracefully degrades (returns null) when `ANTHROPIC_API_KEY` unset
+- **Supplements** (not replaces) structural baseline
+
+#### How They Work Together
+
+1. Structural baseline always runs → provides baseline signals
+2. LLM layer runs if available → adds semantic signals
+3. Both are merged → comprehensive signal set
+4. Calling LLM (Claude in Claude Code) does final synthesis
+5. User sees result through natural conversation
 
 ### Error Handling
 
@@ -90,6 +127,17 @@ npm run typecheck    # Check types
 ## DO NOT
 
 - Commit API keys or secrets
-- Add regex/keyword matching for semantic understanding
 - Skip type validation on external inputs
-- Have Elenchus call LLMs directly (the calling LLM does that)
+- Use regex to **understand meaning** (regex is fine for structural pattern detection)
+- Confuse structural baseline with semantic analysis (they serve different purposes)
+
+## CLARIFICATION: Regex Usage
+
+The phrase "no regex for content understanding" means:
+
+- **WRONG**: Using regex to determine if an epic discusses error handling semantically
+- **RIGHT**: Using regex to detect the presence/absence of error-related keywords
+
+The structural baseline uses regex for **structural indicators** (keyword presence, number
+patterns, grammatical structures). It explicitly does NOT claim to understand meaning.
+The LLM layer does semantic understanding. Both are documented and intentional.

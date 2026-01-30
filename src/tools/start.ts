@@ -196,14 +196,16 @@ export async function handleStart(
     .filter((ac: { level: string }) => ac.level === 'absent' || ac.level === 'mentioned')
     .flatMap((ac: { area: string; missing: string[] }) => ac.missing.map((m: string) => ({ content: `${ac.area}: ${m}`, severity: 'high' })));
 
+  // STRUCTURAL BASELINE: These are keyword-based hints, not semantic understanding.
+  // The LLM layer (detectSignalsWithLLM) adds semantic depth when available.
   const structuralSignals = {
     claims: extracted.goals.map((g: string) => ({ content: g })),
     gaps: [
-      ...generateGapHints(input.content),
+      ...generateStructuralGapHints(input.content),
       ...assessmentGaps,
     ],
     tensions: [] as Array<{ content: string; severity: string }>,
-    assumptions: generateAssumptionHints(input.content),
+    assumptions: generateStructuralAssumptionHints(input.content),
   };
 
   // Try LLM signal detection (uses the analysisPrompt that was previously orphaned)
@@ -311,7 +313,24 @@ export async function handleStart(
 }
 
 /**
- * Extract basic structure from epic content
+ * Extract basic STRUCTURAL elements from epic content.
+ *
+ * IMPORTANT: This is STRUCTURAL EXTRACTION, not semantic understanding.
+ * It uses regex patterns to find common grammatical structures that TYPICALLY
+ * indicate goals, constraints, and acceptance criteria. It cannot understand
+ * meaning or context.
+ *
+ * Example limitations:
+ * - "Users should be able to log in" → extracted as goal ✓
+ * - "A robust login system" → NOT extracted (no modal verb pattern)
+ * - "We should avoid feature X" → incorrectly extracted as goal (negative context)
+ *
+ * These structural extractions provide the BASELINE for the calling LLM to work
+ * with. The LLM does the actual semantic understanding - Elenchus just provides
+ * structured data to reason about.
+ *
+ * @param content - Raw epic content
+ * @returns Structurally extracted elements (title, description, goals, constraints, criteria)
  */
 function extractFromContent(content: string): {
   title: string;
@@ -322,7 +341,7 @@ function extractFromContent(content: string): {
 } {
   const lines = content.split('\n').filter(line => line.trim());
 
-  // Title: first line or first heading
+  // Title: first line or first heading (structural extraction)
   let title = 'Untitled Epic';
   const headingMatch = content.match(/^#\s+(.+)$/m);
   if (headingMatch?.[1]) {
@@ -331,10 +350,11 @@ function extractFromContent(content: string): {
     title = lines[0].slice(0, 100);
   }
 
-  // Description: first paragraph
+  // Description: first paragraph (structural extraction)
   const description = content.slice(0, 500);
 
-  // Goals: look for action verbs
+  // Goals: modal verb patterns that TYPICALLY indicate intentions
+  // Note: This is structural pattern matching, not semantic goal detection
   const goals: string[] = [];
   const goalPatterns = /(?:should|must|need to|want to|will)\s+([^.!?]+)/gi;
   let match;
@@ -344,7 +364,8 @@ function extractFromContent(content: string): {
     }
   }
 
-  // Constraints: look for limiting language
+  // Constraints: limiting language patterns
+  // Note: This is structural pattern matching, not semantic constraint detection
   const constraints: string[] = [];
   const constraintPatterns = /(?:must not|cannot|should not|within|under|maximum|minimum|at least|no more than)\s+([^.!?]+)/gi;
   while ((match = constraintPatterns.exec(content)) !== null) {
@@ -353,7 +374,8 @@ function extractFromContent(content: string): {
     }
   }
 
-  // Acceptance criteria: look for success conditions
+  // Acceptance criteria: success condition patterns
+  // Note: This is structural pattern matching, not semantic criteria detection
   const acceptanceCriteria: string[] = [];
   const criteriaPatterns = /(?:done when|success when|complete when|verified by|tested by)\s+([^.!?]+)/gi;
   while ((match = criteriaPatterns.exec(content)) !== null) {
@@ -542,43 +564,77 @@ function generateInitialQuestions(
 }
 
 /**
- * Generate gap hints based on common missing elements
+ * Generate STRUCTURAL gap hints based on keyword absence.
+ *
+ * IMPORTANT: This is the STRUCTURAL BASELINE layer. It detects the ABSENCE of
+ * keywords that typically indicate coverage of important areas. This is NOT
+ * semantic gap detection - it cannot understand whether the concept is truly
+ * missing or just described differently.
+ *
+ * Example: If an epic says "system crashes gracefully" but doesn't use the words
+ * "error", "fail", or "exception", this will flag "Error handling not mentioned"
+ * even though error handling IS discussed. The LLM layer (llm-signal-detector.ts)
+ * performs semantic analysis to catch such nuances.
+ *
+ * This baseline ensures Elenchus provides value even without ANTHROPIC_API_KEY.
+ * When LLM is available, its signals supplement (not replace) these baseline hints.
+ *
+ * @param content - Raw epic content
+ * @returns Array of structural gap hints based on keyword absence
  */
-function generateGapHints(content: string): Array<{ content: string; severity: string }> {
+function generateStructuralGapHints(content: string): Array<{ content: string; severity: string }> {
   const gaps: Array<{ content: string; severity: string }> = [];
   const lower = content.toLowerCase();
 
+  // These are KEYWORD checks, not semantic understanding.
+  // LLM layer (llm-signal-detector.ts) does the semantic work.
   if (!lower.includes('error') && !lower.includes('fail') && !lower.includes('exception')) {
-    gaps.push({ content: 'Error handling not mentioned', severity: 'high' });
+    gaps.push({ content: 'Error handling keywords not found (structural check)', severity: 'high' });
   }
   if (!lower.includes('auth') && !lower.includes('login') && !lower.includes('permission')) {
-    gaps.push({ content: 'Authentication/authorization not mentioned', severity: 'medium' });
+    gaps.push({ content: 'Authentication keywords not found (structural check)', severity: 'medium' });
   }
   if (!lower.includes('scale') && !lower.includes('performance') && !lower.includes('load')) {
-    gaps.push({ content: 'Scale/performance requirements not mentioned', severity: 'medium' });
+    gaps.push({ content: 'Performance keywords not found (structural check)', severity: 'medium' });
   }
   if (!lower.includes('test') && !lower.includes('verify') && !lower.includes('validate')) {
-    gaps.push({ content: 'Testing approach not mentioned', severity: 'medium' });
+    gaps.push({ content: 'Testing keywords not found (structural check)', severity: 'medium' });
   }
 
   return gaps;
 }
 
 /**
- * Generate assumption hints
+ * Generate STRUCTURAL assumption hints based on keyword presence.
+ *
+ * IMPORTANT: This is the STRUCTURAL BASELINE layer. It detects the PRESENCE of
+ * keywords that often imply hidden dependencies. This is NOT semantic assumption
+ * detection - it cannot understand context or whether the assumption is valid.
+ *
+ * Example: If an epic mentions "database" in the context of "we will create a new
+ * database", this will still flag "Assumes database exists" because it only sees
+ * the keyword, not the meaning. The LLM layer performs semantic analysis.
+ *
+ * This baseline ensures Elenchus provides value even without ANTHROPIC_API_KEY.
+ * When LLM is available, its signals supplement (not replace) these baseline hints.
+ *
+ * @param content - Raw epic content
+ * @returns Array of structural assumption hints based on keyword presence
  */
-function generateAssumptionHints(content: string): Array<{ content: string }> {
+function generateStructuralAssumptionHints(content: string): Array<{ content: string }> {
   const assumptions: Array<{ content: string }> = [];
   const lower = content.toLowerCase();
 
+  // These are KEYWORD checks, not semantic understanding.
+  // LLM layer (llm-signal-detector.ts) does the semantic work.
   if (lower.includes('database') || lower.includes('data')) {
-    assumptions.push({ content: 'Assumes database exists and is accessible' });
+    assumptions.push({ content: 'References database/data (may assume infrastructure exists)' });
   }
   if (lower.includes('api') || lower.includes('endpoint')) {
-    assumptions.push({ content: 'Assumes API infrastructure exists' });
+    assumptions.push({ content: 'References API (may assume infrastructure exists)' });
   }
   if (lower.includes('user')) {
-    assumptions.push({ content: 'Assumes user management system exists' });
+    assumptions.push({ content: 'References users (may assume user management exists)' });
   }
 
   return assumptions;
