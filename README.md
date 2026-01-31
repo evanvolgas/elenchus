@@ -1,17 +1,21 @@
 # Elenchus
 
-An MCP server that builds better specs through Socratic interrogation.
+<img src="elenchus.png" alt="Elenchus" width="100%">
+
+An MCP server that provides scaffolding for Socratic interrogation of specifications.
 
 > **Elenchus** (ἔλεγχος): The Socratic method of exposing contradictions through systematic questioning.
 
 ## What It Does
 
-Elenchus implements **true Socratic elenchus** - not just Q&A tracking, but **contradiction detection and forced resolution**.
+Elenchus provides **structure and constraints** for spec development. The intelligence comes from the LLM (Claude); Elenchus provides the scaffolding.
 
-1. **Extracts premises** - From each answer, extract the logical commitments
-2. **Detects contradictions** - Check if accumulated premises conflict
-3. **Forces aporia** - Cannot generate spec until contradictions are resolved
-4. **Gates spec generation** - Blocks until all required areas covered AND no unresolved contradictions
+1. **Stores premises** - Persists the logical commitments extracted from your answers
+2. **Tracks contradictions** - Maintains state of detected conflicts and their resolutions
+3. **Gates spec generation** - Blocks until contradictions are resolved
+4. **Organizes output** - Structures Q&A into a specification format
+
+**To be clear:** Claude performs the interrogation—asking questions, extracting premises from your answers, detecting contradictions. Elenchus stores that data and enforces the constraint that you cannot generate a spec while contradictions remain unresolved.
 
 This addresses the [41.77% of agent failures](https://www.augmentcode.com/guides/why-multi-agent-llm-systems-fail-and-how-to-fix-them) caused by specification problems.
 
@@ -138,22 +142,23 @@ elenchus_spec({ "sessionId": "session-xxx" })
 | `elenchus_spec` | Generate specification (blocked if contradictions exist) |
 | `elenchus_health` | Server health check |
 
-## What Makes This Socratic
+## The Workflow
 
 **Standard Q&A tracking:**
 - "What users?" → "Admins and regular users" → Store it ✓
 
-**True Socratic elenchus:**
-- Extract premise: "Two user roles exist with different permissions"
-- Later: "All users can do X" → Extract premise: "No permission differences"
-- **Contradiction detected**: Cannot have role-based permissions AND no permission differences
+**With Elenchus:**
+- Claude extracts premise: "Two user roles exist with different permissions"
+- Later: "All users can do X" → Claude extracts premise: "No permission differences"
+- Claude detects contradiction, submits it to Elenchus
+- Elenchus blocks spec generation until you resolve it
 - **Force resolution**: "Which is true? Or clarify how both work together."
 
-This is the [four-phase elenchus](https://en.wikipedia.org/wiki/Socratic_method#Method):
-1. **Thesis** - User states a claim
-2. **Examination** - Extract premises through questioning
-3. **Refutation** - Show premises contradict
-4. **Aporia** - User recognizes inconsistency → better requirements
+The [Socratic method](https://en.wikipedia.org/wiki/Socratic_method#Method) has four phases. Claude performs the first three; Elenchus enforces the fourth:
+1. **Thesis** - User states a claim (you answer questions)
+2. **Examination** - Extract premises through questioning (Claude does this)
+3. **Refutation** - Show premises contradict (Claude detects, Elenchus stores)
+4. **Aporia** - User recognizes inconsistency → better requirements (Elenchus gates spec until resolved)
 
 ## Why This Matters
 
@@ -166,7 +171,7 @@ From [Ashita AI's analysis](https://ashita.ai/blog/the-factory-without-a-design-
 - "The constraint moved upstream. The tooling did not follow."
 - Everyone builds factories (orchestration). Nobody builds the design department.
 
-Elenchus is the design department.
+Elenchus is one attempt at building that tooling. See [How I Learned to Stop Worrying and Write the Spec](https://ashita.ai/blog/how-i-learned-to-stop-worrying-and-write-the-spec/) for an honest assessment of what worked and what the limitations are.
 
 ## Development
 
