@@ -13,21 +13,11 @@ import { startTool, handleStart } from './start.js';
 import { qaTool, handleQA } from './qa.js';
 import { specTool, handleSpec } from './spec.js';
 
+// Unified session management
+import { sessionTool, handleSession } from './session.js';
+
 // Ops tool
 import { healthTool, handleHealth } from './health.js';
-
-// Lifecycle tools
-import { listTool, handleList } from './list.js';
-import { deleteTool, handleDelete } from './delete.js';
-import { resumeTool, handleResume } from './resume.js';
-
-// Data access tools
-import { premisesTool, handlePremises } from './premises.js';
-import { contradictionsTool, handleContradictions } from './contradictions.js';
-
-// Export and context tools
-import { exportTool, handleExport } from './export.js';
-import { contextTool, handleContext } from './context.js';
 
 /**
  * Re-export error codes for backwards compatibility
@@ -38,25 +28,11 @@ export const ErrorCodes = ErrorCode;
 /**
  * Register all MCP tools
  *
- * Core API:
+ * Simplified 5-tool API:
  * - elenchus_start: Begin interrogation
  * - elenchus_qa: Submit Q&A, get quality feedback
  * - elenchus_spec: Generate specification
- *
- * Lifecycle:
- * - elenchus_list: List epics/sessions/specs
- * - elenchus_delete: Delete epic/session
- * - elenchus_resume: Resume existing session
- *
- * Data Access:
- * - elenchus_premises: View/manage premises
- * - elenchus_contradictions: View/resolve contradictions
- *
- * Export & Context:
- * - elenchus_export: Export spec/session/audit
- * - elenchus_context: Analyze codebase context
- *
- * Ops:
+ * - elenchus_session: Unified session management (list, delete, resume, premises, contradictions, export)
  * - elenchus_health: Health check
  */
 export function registerTools(): Tool[] {
@@ -65,16 +41,8 @@ export function registerTools(): Tool[] {
     startTool,
     qaTool,
     specTool,
-    // Lifecycle
-    listTool,
-    deleteTool,
-    resumeTool,
-    // Data access
-    premisesTool,
-    contradictionsTool,
-    // Export & context
-    exportTool,
-    contextTool,
+    // Session management
+    sessionTool,
     // Ops
     healthTool,
   ];
@@ -165,35 +133,9 @@ export async function handleToolCall(
             result = await handleSpec(args, storage);
             break;
 
-          // Lifecycle
-          case 'elenchus_list':
-            result = handleList(args, storage);
-            break;
-
-          case 'elenchus_delete':
-            result = handleDelete(args, storage);
-            break;
-
-          case 'elenchus_resume':
-            result = handleResume(args, storage);
-            break;
-
-          // Data access
-          case 'elenchus_premises':
-            result = handlePremises(args, storage);
-            break;
-
-          case 'elenchus_contradictions':
-            result = handleContradictions(args, storage);
-            break;
-
-          // Export & context
-          case 'elenchus_export':
-            result = handleExport(args, storage);
-            break;
-
-          case 'elenchus_context':
-            result = handleContext(args, storage);
+          // Session management
+          case 'elenchus_session':
+            result = handleSession(args, storage);
             break;
 
           // Ops
@@ -203,7 +145,7 @@ export async function handleToolCall(
 
           default:
             logger.warn('Unknown tool requested', undefined, { tool: name });
-            throw new Error(`Unknown tool: ${name}. Available: elenchus_start, elenchus_qa, elenchus_spec, elenchus_list, elenchus_delete, elenchus_resume, elenchus_premises, elenchus_contradictions, elenchus_export, elenchus_context, elenchus_health`);
+            throw new Error(`Unknown tool: ${name}. Available: elenchus_start, elenchus_qa, elenchus_spec, elenchus_session, elenchus_health`);
         }
 
         const elapsedMs = logger.getElapsedMs();
