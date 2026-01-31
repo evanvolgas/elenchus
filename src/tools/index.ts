@@ -16,6 +16,19 @@ import { specTool, handleSpec } from './spec.js';
 // Ops tool
 import { healthTool, handleHealth } from './health.js';
 
+// Lifecycle tools
+import { listTool, handleList } from './list.js';
+import { deleteTool, handleDelete } from './delete.js';
+import { resumeTool, handleResume } from './resume.js';
+
+// Data access tools
+import { premisesTool, handlePremises } from './premises.js';
+import { contradictionsTool, handleContradictions } from './contradictions.js';
+
+// Export and context tools
+import { exportTool, handleExport } from './export.js';
+import { contextTool, handleContext } from './context.js';
+
 /**
  * Re-export error codes for backwards compatibility
  * @deprecated Use ErrorCode from '../utils/errors.js' instead
@@ -25,17 +38,44 @@ export const ErrorCodes = ErrorCode;
 /**
  * Register all MCP tools
  *
- * Simplified API:
+ * Core API:
  * - elenchus_start: Begin interrogation
  * - elenchus_qa: Submit Q&A, get quality feedback
  * - elenchus_spec: Generate specification
- * - elenchus_health: Health check (ops)
+ *
+ * Lifecycle:
+ * - elenchus_list: List epics/sessions/specs
+ * - elenchus_delete: Delete epic/session
+ * - elenchus_resume: Resume existing session
+ *
+ * Data Access:
+ * - elenchus_premises: View/manage premises
+ * - elenchus_contradictions: View/resolve contradictions
+ *
+ * Export & Context:
+ * - elenchus_export: Export spec/session/audit
+ * - elenchus_context: Analyze codebase context
+ *
+ * Ops:
+ * - elenchus_health: Health check
  */
 export function registerTools(): Tool[] {
   return [
+    // Core
     startTool,
     qaTool,
     specTool,
+    // Lifecycle
+    listTool,
+    deleteTool,
+    resumeTool,
+    // Data access
+    premisesTool,
+    contradictionsTool,
+    // Export & context
+    exportTool,
+    contextTool,
+    // Ops
     healthTool,
   ];
 }
@@ -112,6 +152,7 @@ export async function handleToolCall(
         let result: unknown;
 
         switch (name) {
+          // Core
           case 'elenchus_start':
             result = await handleStart(args, storage);
             break;
@@ -124,13 +165,45 @@ export async function handleToolCall(
             result = await handleSpec(args, storage);
             break;
 
+          // Lifecycle
+          case 'elenchus_list':
+            result = handleList(args, storage);
+            break;
+
+          case 'elenchus_delete':
+            result = handleDelete(args, storage);
+            break;
+
+          case 'elenchus_resume':
+            result = handleResume(args, storage);
+            break;
+
+          // Data access
+          case 'elenchus_premises':
+            result = handlePremises(args, storage);
+            break;
+
+          case 'elenchus_contradictions':
+            result = handleContradictions(args, storage);
+            break;
+
+          // Export & context
+          case 'elenchus_export':
+            result = handleExport(args, storage);
+            break;
+
+          case 'elenchus_context':
+            result = handleContext(args, storage);
+            break;
+
+          // Ops
           case 'elenchus_health':
             result = await handleHealth(args, storage);
             break;
 
           default:
             logger.warn('Unknown tool requested', undefined, { tool: name });
-            throw new Error(`Unknown tool: ${name}. Available: elenchus_start, elenchus_qa, elenchus_spec, elenchus_health`);
+            throw new Error(`Unknown tool: ${name}. Available: elenchus_start, elenchus_qa, elenchus_spec, elenchus_list, elenchus_delete, elenchus_resume, elenchus_premises, elenchus_contradictions, elenchus_export, elenchus_context, elenchus_health`);
         }
 
         const elapsedMs = logger.getElapsedMs();
